@@ -136,7 +136,7 @@ def _worker(job: Job, params: dict) -> None:
             voxel_mm=float(params.get("voxel_mm", 1.5)),
             bucket_s=float(params.get("bucket_s", 0.3)),
             chamber_temp=params.get("chamber_temp"),
-            iface_reheat=float(params.get("iface_reheat", 0.5)),
+            iface_reheat=float(params.get("iface_reheat", 0.8)),
         )
         # 已校准档案优先（显式传入的 iface_reheat 仍以用户为准）
         profile = load_profile(material.name)

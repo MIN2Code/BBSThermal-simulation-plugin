@@ -45,7 +45,7 @@ class SimConfig:
     margin_cells: int = 3        # 网格外扩格数（保证沉积格都在动力内核内）
     max_cells: int = 8_000_000   # 网格单元上限（超出自动加大体素）
     # κ/η 默认值：对 Helio 官方标定显示拟合（P2S 手办件，均值差 +2.5°C、层相关 0.40）
-    iface_reheat: float = 0.5    # 界面再热系数 κ∈[0,1)：新珠对本格基面的接触再热权重
+    iface_reheat: float = 0.8    # 界面再热系数 κ∈[0,1)：新珠对本格基面的接触再热权重
     # —— 流量 → 有效熔温：流速越快，熔体在喷嘴内吸热不足，出口温度低于设定值
     flow_derate: float = 8.0     # 满档降额 °C
     flow_ref: float = 2.0        # 起降流量 mm³/s（低于此不降）
@@ -235,6 +235,7 @@ class ThermalSimulator:
         self.origin = p.bbox_min - cfg.margin_cells * dx
         self.T = np.full(tuple(self.shape), float(self.cfg.chamber_temp), dtype=np.float64)
         self.frac = np.zeros(tuple(self.shape), dtype=np.float64)
+        self.last_dep = np.full(tuple(self.shape), -np.inf, dtype=np.float64)  # 每格最后沉积时刻
         self.top_iz = cfg.margin_cells + 1
 
         cell_v = dx ** 3                                    # mm³
@@ -253,6 +254,7 @@ class ThermalSimulator:
             dtype=np.int64)
         self._T_flat = self.T.ravel()
         self._frac_flat = self.frac.ravel()
+        self._last_dep_flat = self.last_dep.ravel()
 
         order = np.argsort(p.t_mid, kind="stable")
         self._order = order
@@ -287,6 +289,7 @@ class ThermalSimulator:
         seg_fan = p.fan[self._order]
         seg_end = p.t_mid[self._order] + p.duration[self._order]
         seg_dur = p.duration[self._order]
+        seg_layer_t0 = p.layer_t0[p.layer_idx[self._order]]
         layer0 = p.layer_idx[self._order] == 0
         # 有效熔温：体积流量大 → 喷嘴吸热不足 → 出口温度低于设定值
         cfg = self.cfg
@@ -333,11 +336,14 @@ class ThermalSimulator:
                     self.T[jx, jy, iz] += dT_n
 
             # ---- 1.1) 界面温度采样（v3：展平大矩阵化，一次采集 18 邻域）----
+            # 只承认「本层开始之前」沉积的格为基材——同层刚撒下的邻格热珠
+            # （~205°C）不是基材，计入会造成周期性热峰伪影。
+            t_layer0 = seg_layer_t0[i:j][:, None]
             base_flat = (ix * self.shape[1] + iy) * self.shape[2] + iz
             neigh = base_flat[:, None] + self._neigh_off[None, :]
             f_all = self._frac_flat[neigh]
             t_all = self._T_flat[neigh]
-            ok_m = f_all > _OCC_EPS
+            ok_m = (f_all > _OCC_EPS) & (self._last_dep_flat[neigh] < t_layer0)
             any_mat = ok_m.any(axis=1)
             cand = np.where(ok_m, t_all, -np.inf).max(axis=1)
             base = np.where(any_mat, cand, amb)
@@ -370,7 +376,8 @@ class ThermalSimulator:
                 dix, diy, diz = self._cell_of(px, py, pz)
                 vol_each = np.repeat(seg_vol[i:j] / reps, reps)
                 t_each = np.repeat(t_dep, reps)
-                self._deposit(dix, diy, diz, vol_each, t_each)
+                self._deposit(dix, diy, diz, vol_each, t_each,
+                              float(seg_t[i:j].mean()))
 
             # ---- 3) 温度场推进（覆盖到本桶末段结束，含桶间空走/暂停）----
             end_t = float(seg_end[j - 1])
@@ -386,7 +393,7 @@ class ThermalSimulator:
         return iface_out
 
     # ------------------------------------------------------------------
-    def _deposit(self, ix, iy, iz, vol, t_dep: np.ndarray) -> None:
+    def _deposit(self, ix, iy, iz, vol, t_dep: np.ndarray, t_mid: float) -> None:
         """闭式沉积混入：同一格多次沉积按体积加权合并（每点自带沉积温度）。"""
         dx3 = self.voxel ** 3
         v_norm = vol / dx3
@@ -411,6 +418,8 @@ class ThermalSimulator:
         uz = uniq % self.shape[2]
         self.T[ux, uy, uz] = new_t
         self.frac[ux, uy, uz] = new_f
+        # 记录每格最后沉积时刻（界面采样用它排除同层热珠）
+        self.last_dep[ux, uy, uz] = t_mid
         if uz.size:
             self.top_iz = max(self.top_iz, int(uz.max()))
 

@@ -112,7 +112,7 @@ def _run_sim_async(sim_id: str) -> None:
         cfg = SimConfig(
             voxel_mm=float(sim["voxel_mm"]),
             chamber_temp=sim["chamber_temp"],
-            iface_reheat=0.5, nozzle_heat=0.35,
+            iface_reheat=0.8, nozzle_heat=0.35,
         )
         def prog(p):
             sim["progress"] = int(min(p, 0.99) * 100)
@@ -166,7 +166,7 @@ def _run_opt_async(opt_id: str) -> None:
         # 大文件自动减轮次：保证在 BS 的 120s 轮询窗口内完成
         rounds = 2 if parsed.num_segments > 150_000 else 3
         cfg = SimConfig(
-            voxel_mm=1.5, iface_reheat=0.5, nozzle_heat=0.35,
+            voxel_mm=1.5, iface_reheat=0.8, nozzle_heat=0.35,
         )
         opt_cfg = OptimizeConfig(
             rounds=rounds,
