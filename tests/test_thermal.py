@@ -25,7 +25,7 @@ def test_interface_temp_monotonic_in_layer_time():
     def run(feed_slow_part):
         p = parse_gcode(generate_two_rate_gcode())
         mat = get_material("PLA")
-        cfg = SimConfig(voxel_mm=1.5, bucket_s=0.25, nozzle_heat=0.0)
+        cfg = SimConfig(voxel_mm=1.5, bucket_s=0.25, nozzle_heat=0.0, iface_reheat=0.0)
         return ThermalSimulator(p, mat, cfg).run(), p
 
     res, p = run(0)
@@ -45,8 +45,8 @@ def test_interface_temp_monotonic_in_layer_time():
 def test_hot_spot_vs_slow_region_tqi():
     """纯传导物理（η=0）：快速大件应显著热于慢速小件（层时效应的排序不变；
     标定后慢速小件 TQI 接近 0 属正常——无风扇+驻留补偿）。"""
-    res_slow, _ = _sim(generate_box_gcode(layers=15, size=25, feed=15), voxel_mm=1.5, nozzle_heat=0.0)
-    res_fast, _ = _sim(generate_box_gcode(layers=15, size=60, feed=300), voxel_mm=1.5, nozzle_heat=0.0)
+    res_slow, _ = _sim(generate_box_gcode(layers=15, size=25, feed=15), voxel_mm=1.5, nozzle_heat=0.0, iface_reheat=0.0)
+    res_fast, _ = _sim(generate_box_gcode(layers=15, size=60, feed=300), voxel_mm=1.5, nozzle_heat=0.0, iface_reheat=0.0)
     tq_slow = res_slow.tqi[res_slow.tqi_valid]
     tq_fast = res_fast.tqi[res_fast.tqi_valid]
     assert tq_fast.mean() > tq_slow.mean() + 20.0, (
@@ -56,7 +56,7 @@ def test_hot_spot_vs_slow_region_tqi():
 
 def test_dwell_heating_warms_slow_print():
     """喷嘴驻留热隔离检验：同一慢速件，开启驻留热（标定值 0.35）后界面温度应显著高于关闭。"""
-    res_off, _ = _sim(generate_box_gcode(layers=8, size=25, feed=15), voxel_mm=1.5, nozzle_heat=0.0)
+    res_off, _ = _sim(generate_box_gcode(layers=8, size=25, feed=15), voxel_mm=1.5, nozzle_heat=0.0, iface_reheat=0.0)
     res_on, _ = _sim(generate_box_gcode(layers=8, size=25, feed=15), voxel_mm=1.5, nozzle_heat=0.35)
     t_off = res_off.iface_temp[res_off.tqi_valid]
     t_on = res_on.iface_temp[res_on.tqi_valid]
@@ -108,8 +108,8 @@ def test_thin_wall_cools_faster_than_bulk():
 
 def test_same_part_slower_feed_colder_interface():
     """纯传导物理（η=0）：同一零件，慢速打印（长层时）界面温度应低于快速打印。"""
-    res_slow, _ = _sim(generate_box_gcode(layers=10, size=40, feed=20), voxel_mm=1.5, nozzle_heat=0.0)
-    res_fast, _ = _sim(generate_box_gcode(layers=10, size=40, feed=200), voxel_mm=1.5, nozzle_heat=0.0)
+    res_slow, _ = _sim(generate_box_gcode(layers=10, size=40, feed=20), voxel_mm=1.5, nozzle_heat=0.0, iface_reheat=0.0)
+    res_fast, _ = _sim(generate_box_gcode(layers=10, size=40, feed=200), voxel_mm=1.5, nozzle_heat=0.0, iface_reheat=0.0)
     t_slow = res_slow.iface_temp[res_slow.tqi_valid]
     t_fast = res_fast.iface_temp[res_fast.tqi_valid]
     assert t_slow.mean() < t_fast.mean() - 30.0
