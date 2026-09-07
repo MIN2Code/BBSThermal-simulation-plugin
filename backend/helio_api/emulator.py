@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse, Response
 
 from ..gcode.parser import parse_gcode
 from ..thermal.materials import get_material
-from ..thermal.optimize import OptimizeConfig, optimize_speeds, rewrite_gcode
+from ..thermal.optimize import OptimizeConfig, _retime, optimize_speeds, rewrite_gcode
 from ..thermal.voxel import SimConfig, ThermalSimulator
 
 router = APIRouter()
@@ -105,8 +105,9 @@ def annotate_gcode_with_ti(text: str, parsed, res) -> tuple[str, int]:
 def _run_sim_async(sim_id: str) -> None:
     sim = SIMS[sim_id]
     try:
-        text = sim["text"]
-        parsed = parse_gcode(text)
+        g = GCODES[sim["gcode_id"]]
+        text = g["text"]
+        parsed = g["parsed"]          # 复用 createGcodeV2 时的解析结果（省 5~10s）
         material = get_material(sim["material_name"])
         cfg = SimConfig(
             voxel_mm=float(sim["voxel_mm"]),
@@ -151,7 +152,7 @@ def _run_opt_async(opt_id: str) -> None:
     try:
         g = GCODES[opt["gcode_id"]]
         text = g["text"]
-        parsed = parse_gcode(text)
+        parsed = g["parsed"]          # 复用 createGcodeV2 的解析结果（省 5~10s）
         from dataclasses import replace
 
         from ..profiles import load_profile
@@ -162,11 +163,13 @@ def _run_opt_async(opt_id: str) -> None:
                                h_conv_on=material.h_conv_on * float(profile.get("hfan", 1.0)),
                                cold_below=float(profile.get("cold_below", material.cold_below)),
                                ideal_lo=float(profile.get("ideal_lo", material.ideal_lo)))
+        # 大文件自动减轮次：保证在 BS 的 120s 轮询窗口内完成
+        rounds = 2 if parsed.num_segments > 150_000 else 3
         cfg = SimConfig(
             voxel_mm=1.5, iface_reheat=0.5, nozzle_heat=0.35,
         )
         opt_cfg = OptimizeConfig(
-            rounds=3,
+            rounds=rounds,
             min_speed=float(opt.get("min_velocity") or 15.0),
             max_speed=float(opt.get("max_velocity") or 300.0),
             layers_from=opt.get("layers_from"),
@@ -178,6 +181,9 @@ def _run_opt_async(opt_id: str) -> None:
             opt["progress"] = int(min(p, 0.99) * 100)
         result = optimize_speeds(parsed, material, cfg, opt_cfg, progress_cb=prog)
         opt["result"] = result
+        # optimize_speeds 结束时会把 parsed 时间轴恢复为原速——
+        # ti 标注必须反映优化后的速度，先按新速度重计时
+        _retime(parsed, result.new_feed)
         opt_text, _ = rewrite_gcode(text, parsed, result.new_feed)
         # 优化结果同样附带 ti 标注（optimizedGcodeWithThermalIndexes）
         final_sim = ThermalSimulator(parsed, material, cfg)
@@ -296,7 +302,8 @@ async def graphql(request: Request):
                 "printInfo": s["report"],
                 "speedFactor": 1.0,
                 "suggestedFixes": [],
-            })        return _g({"data": {"simulation": data}})
+            })
+        return _g({"data": {"simulation": data}})
 
     if "createOptimization" in query:
         inp = variables.get("input", {})
@@ -331,6 +338,8 @@ async def graphql(request: Request):
         if not o:
             return _g({"errors": [{"message": "optimization not found"}]})
         data = {"id": oid, "name": o["name"], "progress": o["progress"], "status": o["status"]}
+        if o.get("error"):
+            data["error"] = o["error"]
         if o["status"] == "FINISHED":
             data.update({
                 "optimizedGcodeWithThermalIndexesUrl": o["opt_url"],
