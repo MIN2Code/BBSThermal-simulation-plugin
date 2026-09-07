@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 本地研究资料（含参考实现源码，不随仓库分发）
+research/
+
+# 个人测试文件与大体积产物
+测试模型/
+*.log
+up.json
+up3mf.json
+jobid.txt
+jobid3mf.txt
+bin.dat
+opt_out.3mf
+opt_figurine.gcode
+opt_out.gcode
+ti_out.gcode
+
+# 校准档案是本机数据，不入库
+backend/profiles/*.json
+
+# 服务日志
+uvicorn.log
