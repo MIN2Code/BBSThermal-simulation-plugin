@@ -10,6 +10,12 @@ export const FEATURE_NAMES = {
   10: '实心填充', 11: '稀疏填充', 12: '桥接', 13: '内部桥接', 14: '熨烫', 15: '自定义',
 };
 
+// 层时对数 10 档色带（index 0 = 最长层 → 末位 = 最短层），色系对齐 Bambu Studio
+const LT_BAND_COLORS = [
+  0x2ec22e, 0x9fd52f, 0xe0dc2f, 0xf2b32e, 0xf28826,
+  0xe85a2d, 0xe03a3a, 0xd93589, 0xc237c2, 0x7a3be0,
+];
+
 const FEATURE_COLORS = {
   0: 0x888888, 1: 0x557799, 2: 0x446644, 3: 0x446644, 4: 0x557799,
   5: 0x3aa0a8, 6: 0x3aa0a8, 7: 0xd8b34a, 8: 0xe8913d, 9: 0x9a6ad8,
@@ -135,6 +141,8 @@ export class Viewer {
     this.scene.add(this.lines);
 
     this.layerRanges = meta.layer_ranges;
+    this.meta = meta;
+    this._ltLUT = null;
     this._frameCamera(top, off);
   }
 
@@ -161,11 +169,22 @@ export class Viewer {
     if (!this.lines) return;
     this._mode = mode;
     const { count, _f32, _u8 } = this;
+    let ltLUT = null;
+    if (mode === 'layertime') {
+      ltLUT = this._layerTimeLUT();
+    }
     const colors = this.colorAttr.array;
     for (let i = 0; i < count; i++) {
       const b = i * 10;
       let r, g, bl;
-      if (mode === 'tqi') {
+      if (mode === 'layertime') {
+        const li = this._i32[b + 8];
+        if (ltLUT && li >= 0 && li * 3 + 2 < ltLUT.length) {
+          r = ltLUT[li * 3]; g = ltLUT[li * 3 + 1]; bl = ltLUT[li * 3 + 2];
+        } else {
+          r = 0.35; g = 0.35; bl = 0.38;
+        }
+      } else if (mode === 'tqi') {
         const valid = _u8[i * SEG_STRIDE + 37] === 1;
         if (valid) {
           [r, g, bl] = tqiColor(_f32[b + 6]);
@@ -184,6 +203,53 @@ export class Viewer {
       colors[v + 3] = r; colors[v + 4] = g; colors[v + 5] = bl;
     }
     this.colorAttr.needsUpdate = true;
+  }
+
+  /** 层时配色：对数 10 档（长层绿 → 短层紫，对齐 Bambu Studio 层时间视图）。 */
+  _layerTimeLUT() {
+    if (this._ltLUT) return this._ltLUT;
+    const stats = (this.meta && this.meta.layer_stats) || [];
+    if (!stats.length) return null;
+    const nl = Math.max(...stats.map((s) => s.layer + 1));
+    const lt = new Array(nl).fill(NaN);
+    for (const s of stats) {
+      const v = (s.t1 ?? NaN) - (s.t0 ?? NaN);
+      if (isFinite(v) && v > 0.01) lt[s.layer] = v;
+    }
+    const fin = lt.filter((v) => isFinite(v));
+    if (fin.length < 3) return null;
+    const lo = Math.log(Math.max(Math.min(...fin), 0.01));
+    const hi = Math.log(Math.max(...fin));
+    if (hi - lo < 1e-6) return null;
+    const lut = new Float32Array(nl * 3);
+    for (let L = 0; L < nl; L++) {
+      const v = lt[L];
+      if (!isFinite(v)) continue;
+      let k = Math.floor((Math.log(v) - lo) / ((hi - lo) / LT_BAND_COLORS.length));
+      k = Math.min(LT_BAND_COLORS.length - 1, Math.max(0, k));
+      const c = LT_BAND_COLORS[k];
+      lut[L * 3] = ((c >> 16) & 255) / 255;
+      lut[L * 3 + 1] = ((c >> 8) & 255) / 255;
+      lut[L * 3 + 2] = (c & 255) / 255;
+    }
+    this._ltLUT = lut;
+    return lut;
+  }
+
+  /** 图例信息：对数档位边界值 + 颜色（app.js 渲染用）。 */
+  layerTimeBands() {
+    const stats = (this.meta && this.meta.layer_stats) || [];
+    const fin = stats.map((s) => (s.t1 ?? NaN) - (s.t0 ?? NaN)).filter((v) => isFinite(v) && v > 0.01);
+    if (fin.length < 3) return null;
+    const lo = Math.min(...fin), hi = Math.max(...fin);
+    if (hi / lo < 1.05) return null;
+    const ratio = Math.pow(hi / lo, 1 / LT_BAND_COLORS.length);
+    const edges = [];
+    for (let k = 0; k <= LT_BAND_COLORS.length; k++) edges.push(lo * Math.pow(ratio, k));
+    return {
+      colors: LT_BAND_COLORS.map((c) => `#${c.toString(16).padStart(6, '0')}`),
+      edges, lo, hi,
+    };
   }
 
   /** 改可见层（便宜：只改 drawRange，不碰颜色）。滑块拖动专用。

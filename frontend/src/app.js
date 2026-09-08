@@ -279,6 +279,16 @@ function renderLegend() {
     }
     lg.innerHTML = html;
     $('legendlab').textContent = 'TQI：−100 太冷（弱结合） ← 0 理想 → +100 太热（下垂）';
+  } else if (state.mode === 'layertime') {
+    const bands = viewer.layerTimeBands && viewer.layerTimeBands();
+    if (bands) {
+      lg.innerHTML = bands.colors.map((c) => `<i style="background:${c}"></i>`).join('');
+      $('legendlab').textContent =
+        `层时间（对数 10 档）：绿 ${bands.hi.toFixed(1)}s 长/慢 ← → 紫 ${bands.lo.toFixed(1)}s 短/快；突变带 = 冷却纹理带`;
+    } else {
+      lg.innerHTML = '';
+      $('legendlab').textContent = '层时数据不足（先完成热仿真）';
+    }
   } else {
     lg.innerHTML = '';
     $('legendlab').textContent =
