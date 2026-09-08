@@ -97,6 +97,16 @@ td b { font-variant-numeric: tabular-nums; }
   </div>
   <div id="vfa-result"></div>
 </div>
+<div class="card" id="vfa-manual" style="display:none">
+  <p class="dim" style="margin:0 0 10px">该切片的速度均匀（未识别出多速度带）。请填写<b>打印时出现瑕疵的实际速度</b>：
+  若你是打印时手动调过速度倍率，请按 基础速度 × 倍率 换算。</p>
+  <div class="row">
+    <span>起始瑕疵速度</span>
+    <input type="number" id="vfa-onset-manual" min="10" max="500" step="5" value="100"> mm/s
+    <button class="btn" id="fit-vfa-manual">拟合流量悬崖</button>
+  </div>
+  <div id="vfa-manual-result"></div>
+</div>
 
 <h2>已保存的耗材档案</h2>
 <div class="card" id="profiles">加载中…</div>
@@ -140,7 +150,12 @@ $('job-sel').addEventListener('change', async () => {
       $('kind').textContent = `识别为 VFA 速度塔：${st.bands.length} 个速度带（${st.bands[0].speed}→${st.bands[st.bands.length-1].speed}mm/s）`;
       renderVfaForm(st.bands);
     } else {
-      $('kind').textContent = '未识别出温度块/速度带结构——请确认这是塔类测试件的切片。';
+      currentKind = 'vfa';  // 单一速度（BS 的 VFA 常见）：走手动填速兜底
+      $('kind').textContent = '该切片速度均匀——请在下方直接填写打印时出现瑕疵的实际速度。';
+      $('vfa-form').style.display = 'none';
+      $('vfa-manual').style.display = 'block';
+      const sp = st.bands.length ? st.bands[0].speed : null;
+      if (sp) $('vfa-onset-manual').value = sp;
     }
   } catch (e) { $('kind').textContent = '识别失败：' + e.message; }
 });
@@ -210,21 +225,37 @@ function renderTower(rep) {
     </div>`;
 }
 
-// --- VFA 拟合 ---
-$('fit-vfa').addEventListener('click', async () => {
-  const onset = parseFloat($('vfa-band').value);
+// --- VFA 拟合（两种入口：速度带选择 / 手动填起始速度）---
+async function submitVfa(onset) {
   try {
     const rep = await (await fetch('/api/calibration/vfa/fit', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({job_id: currentJob, onset_speed: onset})
     })).json();
-    $('vfa-result').innerHTML = `
-      <div class="card">
-        <b>流量悬崖：</b>起始瑕疵档 ${rep.onset_speed}mm/s（${rep.onset_flow}mm³/s）<br>
-        <span class="dim">流量降额曲线已更新：ref=${rep.flow_ref} span=${rep.flow_span} mm³/s，已存入档案。</span>
-      </div>`;
     loadProfiles();
-  } catch (e) { $('vfa-result').innerHTML = `<div class="card bad">失败：${e.message}</div>`; }
+    return rep;
+  } catch (e) { return {ok: false, error: e.message}; }
+}
+
+$('fit-vfa').addEventListener('click', async () => {
+  const onset = parseFloat($('vfa-band').value);
+  const rep = await submitVfa(onset);
+  $('vfa-result').innerHTML = rep.ok ? `
+    <div class="card">
+      <b>流量悬崖：</b>起始瑕疵档 ${rep.onset_speed}mm/s（${rep.onset_flow}mm³/s）<br>
+      <span class="dim">流量降额曲线已更新：ref=${rep.flow_ref} span=${rep.flow_span} mm³/s，已存入档案。</span>
+    </div>` : `<div class="card bad">失败：${rep.error || rep.diagnosis || '未知错误'}</div>`;
+});
+
+$('fit-vfa-manual').addEventListener('click', async () => {
+  const onset = parseFloat($('vfa-onset-manual').value);
+  if (!onset) { alert('请填写起始瑕疵速度'); return; }
+  const rep = await submitVfa(onset);
+  $('vfa-manual-result').innerHTML = rep.ok ? `
+    <div class="card good">
+      <b>流量悬崖：</b>起始瑕疵速度 ${rep.onset_speed}mm/s（${rep.onset_flow}mm³/s）<br>
+      <span class="dim">流量降额曲线已更新：ref=${rep.flow_ref} span=${rep.flow_span} mm³/s，已存入档案。</span>
+    </div>` : `<div class="card bad">失败：${rep.error || rep.diagnosis || '未知错误'}</div>`;
 });
 
 // --- 掰断芯片（隐藏的备用方式）---
