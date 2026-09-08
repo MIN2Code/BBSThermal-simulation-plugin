@@ -1,0 +1,9 @@
+# 可选：GPU 加速热仿真（实验性）
+# 说明：当前 CPU（numba）路径更快——Windows WDDM 下 GPU 的小核函数启动开销
+# 大于计算收益。仅建议在 Linux/TCC 或未来 CUDA Graphs 优化后启用。
+#
+# 安装（按你的 CUDA 版本选择 index-url，RTX 20 系用 cu121 即可）：
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+#
+# 启用方式：SimConfig(device="gpu")
+torch>=2.0
