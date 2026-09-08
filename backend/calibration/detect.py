@@ -9,8 +9,12 @@ from __future__ import annotations
 import numpy as np
 
 
-def detect_nozzle_blocks(parsed) -> list[dict]:
-    """按喷嘴温度的连续段划分块（1 基块号，自下而上）。"""
+def detect_nozzle_blocks(parsed, *, min_block_layers: int = 3) -> list[dict]:
+    """按喷嘴温度的连续段划分块（1 基块号，自下而上）。
+
+    跨度小于 min_block_layers 的琐碎块（如首层温度 -5°C 的常规设置）
+    被丢弃——它们不构成温度塔的标定块。
+    """
     noz = parsed.nozzle_seg
     lay = parsed.layer_idx
     blocks: list[dict] = []
@@ -26,6 +30,8 @@ def detect_nozzle_blocks(parsed) -> list[dict]:
     if cur is not None:
         cur["layer_to"] = int(lay[-1])
         blocks.append(cur)
+    # 丢弃琐碎块（首层温度差等），保留真正的标定块
+    blocks = [b for b in blocks if b["layer_to"] - b["layer_from"] + 1 >= min_block_layers]
     for n, blk in enumerate(blocks, 1):
         blk["index"] = n
     return blocks

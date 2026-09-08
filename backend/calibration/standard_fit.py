@@ -34,7 +34,7 @@ def fit_temp_tower_gcode(parsed, res, outcomes: dict[int, str]) -> dict:
     """outcomes: {块号(1基): "weak"|"ok"|"hot"}。返回拟合报告（含窗口参数）。"""
     blocks = detect_nozzle_blocks(parsed)
     ifaces = block_iface_medians(parsed, res, blocks)
-    reported = [bi for bi in outcomes if bi <= len(blocks)]
+    reported = [bi for bi in outcomes if 1 <= bi <= len(blocks)]
     if len(reported) < 2:
         return {"ok": False, "diagnosis": "有效报告的块数不足 2 个，无法拟合窗口"}
 
@@ -44,6 +44,8 @@ def fit_temp_tower_gcode(parsed, res, outcomes: dict[int, str]) -> dict:
     agree = 0
     reported_n = 0
     for bi, cat in outcomes.items():
+        if not (1 <= bi <= len(blocks)):
+            continue
         iface = float(ifaces[bi - 1])
         if not np.isfinite(iface):
             continue
@@ -63,6 +65,8 @@ def fit_temp_tower_gcode(parsed, res, outcomes: dict[int, str]) -> dict:
     t_bond = (lo_b + hi_b) / 2 if np.isfinite(hi_b) else lo_b
     t_sag = (lo_s + hi_s) / 2 if np.isfinite(hi_s) else hi_s
     for bi, cat in outcomes.items():
+        if not (1 <= bi <= len(blocks)):
+            continue
         iface = float(ifaces[bi - 1])
         pred = "weak" if iface <= t_bond else ("hot" if iface >= t_sag else "ok")
         if pred == cat:
