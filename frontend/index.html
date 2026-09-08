@@ -97,6 +97,13 @@ footer {
   <button class="btn primary" id="simulate" disabled>开始热仿真</button>
   <button class="btn" id="optimize" disabled title="基于热仿真结果自动调整逐层速度">优化打印速度</button>
   <a class="btn ghost" href="/calibration" target="_blank">校准</a>
+  <span class="field" title="切换 Bambu Studio 的 Helio 端点。切换后需完全关闭并重启 Bambu Studio 才生效">
+    <span style="color:var(--dim)">BS Helio 端点</span>
+    <select id="bsmode">
+      <option value="local">本地引擎</option>
+      <option value="helio">官方 Helio 云</option>
+    </select>
+  </span>
   <div id="progress"><div id="pbar"><div></div></div><span id="ptext"></span></div>
 </header>
 

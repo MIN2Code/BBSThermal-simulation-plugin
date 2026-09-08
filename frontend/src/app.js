@@ -485,9 +485,42 @@ function renderOptimizeReport(m) {
     </div>`);
 }
 
+// ---------------------------------------------------------------- BS 端点切换
+async function loadBsMode() {
+  try {
+    const st = await (await fetch('/api/bsconfig')).json();
+    if (st.mode) $('bsmode').value = st.mode;
+  } catch { /* 服务未就绪 */ }
+}
+
+$('bsmode').addEventListener('change', async (ev) => {
+  const mode = ev.target.value;
+  if (!confirm(mode === 'local'
+    ? '切换到本地引擎？需要完全关闭并重启 Bambu Studio 后生效。'
+    : '切换回官方 Helio 云？需要完全关闭并重启 Bambu Studio 后生效（PAT 将自动还原为备份的官方令牌）。')) {
+    await loadBsMode();
+    return;
+  }
+  try {
+    const r = await fetch('/api/bsconfig', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mode})
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    if (j.warning) toast(j.warning, 8000);
+    else toast(mode === 'local' ? '已切换到本地引擎——请重启 Bambu Studio'
+                                : '已切换回官方 Helio 云——请重启 Bambu Studio', 8000);
+  } catch (e) {
+    toast('切换失败：' + e.message);
+    await loadBsMode();
+  }
+});
+
 // ---------------------------------------------------------------- 启动
 loadMaterials();
 renderLegend();
+loadBsMode();
 
 // 支持 /?job=<id> 直接载入已有任务（便于重开与调试）
 (async function openJobFromUrl() {
