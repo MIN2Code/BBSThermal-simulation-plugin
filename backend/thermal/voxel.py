@@ -44,6 +44,7 @@ class SimConfig:
     ambient_temp: float = 25.0
     margin_cells: int = 3        # 网格外扩格数（保证沉积格都在动力内核内）
     max_cells: int = 8_000_000   # 网格单元上限（超出自动加大体素）
+    device: str = "cpu"          # cpu（默认，numba 最快）| gpu（实验性，WDDM 小内核开销大）
     # κ/η 默认值：对 Helio 官方标定显示拟合（P2S 手办件，均值差 +2.5°C、层相关 0.40）
     iface_reheat: float = 0.8    # 界面再热系数 κ∈[0,1)：新珠对本格基面的接触再热权重
     # —— 流量 → 有效熔温：流速越快，熔体在喷嘴内吸热不足，出口温度低于设定值
@@ -167,6 +168,16 @@ class ThermalSimulator:
 
     # ------------------------------------------------------------------
     def run(self) -> SimResult:
+        # GPU 路径（device='gpu'）为实验性：WDDM 下每桶几十次小核启动的开销
+        # 大于计算本身，实测慢于 numba CPU。默认 CPU（向量化后已足够快）。
+        if self.cfg.device == "gpu":
+            try:
+                from .gpu_sim import gpu_available, simulate_gpu
+                if gpu_available():
+                    return simulate_gpu(self.p, self.m, self.cfg, self.progress_cb)
+            except ImportError:
+                pass
+            raise RuntimeError("device='gpu' 但 torch/CUDA 不可用")
         import time
 
         t0 = time.perf_counter()

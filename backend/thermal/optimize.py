@@ -71,11 +71,37 @@ def _tqi_overview(res, parsed) -> dict:
         return {"mean_tqi": None}
     return {
         "mean_tqi": float(v.mean()),
+        "std_tqi": float(v.std()),
         "cold_pct": float((v < -50).mean() * 100),
         "hot_pct": float((v > 50).mean() * 100),
         "ok_pct": float((np.abs(v) <= 50).mean() * 100),
         "iface_median": float(np.median(t)),
     }
+
+
+def _score(overview: dict) -> float | None:
+    """综合质量分：均值 − 0.25×标准差（越好越热学均衡）。"""
+    m, s = overview.get("mean_tqi"), overview.get("std_tqi")
+    if m is None:
+        return None
+    return m - 0.25 * (s or 0.0)
+
+
+def _smooth_factor(factor: np.ndarray, nodes: int = 9) -> np.ndarray:
+    """节点平滑：把逐层因子压缩为 K 个锚点的线性插值曲线。
+
+    对齐 Helio 的 autolinear 策略——自由度受限的调速曲线更平滑、
+    不会逐层震荡；锚点值取邻近层的中位数抗野值。
+    """
+    n = len(factor)
+    if n <= nodes:
+        return factor
+    ax = np.linspace(0, n - 1, nodes)
+    vals = []
+    for a in ax:
+        lo, hi = int(max(0, a - 2)), int(min(n, a + 3))
+        vals.append(np.median(factor[lo:hi]))
+    return np.interp(np.arange(n), ax, np.asarray(vals))
 
 
 def optimize_speeds(
@@ -131,9 +157,10 @@ def optimize_speeds(
                     layer_factor[li] = opt_config.cold_gain
                 elif mt > opt_config.hot_threshold:
                     layer_factor[li] = opt_config.hot_gain
+            # 节点平滑：K 锚点插值约束调速曲线（Helio autolinear 思路）
+            layer_factor = _smooth_factor(layer_factor, nodes=9)
             new_feed = np.clip(feed * layer_factor[parsed.layer_idx],
-                               opt_config.min_speed, opt_config.max_speed)
-            # 表面优先：外墙段只降不升
+                               opt_config.min_speed, opt_config.max_speed)            # 表面优先：外墙段只降不升
             if opt_config.priority == "surface":
                 outer = parsed.feature_id == 8  # Feature.OUTER_WALL
                 new_feed = np.where(outer & (new_feed > feed), feed, new_feed)
@@ -151,15 +178,16 @@ def optimize_speeds(
             if changed == 0:
                 break
 
-        # 防回退：若优化后均值反而变差，回滚为原速（保底：至少不变差）
+        # 防回退：综合分（均值 − 0.25×均匀性罚）若反而变差，回滚为原速
         _retime(parsed, feed)
         sim = ThermalSimulator(parsed, material, sim_config)
         res = sim.run()
         result.final = _tqi_overview(res, parsed)
         result.final["est_time_s"] = float(parsed.t_mid[-1] + parsed.duration[-1])
-        if (result.baseline.get("mean_tqi") is not None
-                and result.final.get("mean_tqi") is not None
-                and result.final["mean_tqi"] < result.baseline["mean_tqi"]):
+        base_score = _score(result.baseline)
+        final_score = _score(result.final)
+        if (base_score is not None and final_score is not None
+                and final_score < base_score):
             # 优化反而变差 → 回滚原速（保底：至少不变差）
             feed = orig_feed.copy()
             _retime(parsed, feed)
