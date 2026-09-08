@@ -25,3 +25,5 @@ backend/profiles/*.json
 
 # 服务日志
 uvicorn.log
+vfa_upload.3mf
+upvfa.json
