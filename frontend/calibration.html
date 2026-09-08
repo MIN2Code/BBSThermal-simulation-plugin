@@ -70,10 +70,13 @@ td b { font-variant-numeric: tabular-nums; }
 <h2>① 上传标准测试件的切片 G-code</h2>
 <div class="card">
   <div class="row">
-    <span>任务</span>
-    <select id="job-sel" style="min-width:320px"></select>
+    <label class="btn" for="cal-upload">上传 G-code（.gcode / .gcode.3mf）</label>
+    <input type="file" id="cal-upload" accept=".gcode,.gco,.txt,.3mf" style="display:none">
+    <span>或从已上传任务中选择</span>
+    <select id="job-sel" style="min-width:260px"></select>
     <button class="btn ghost" id="detect">识别结构</button>
   </div>
+  <div id="up-status" class="dim" style="margin-top:8px"></div>
   <div id="kind" class="dim" style="margin-top:8px">尚未识别。</div>
 </div>
 
@@ -125,13 +128,30 @@ async function loadMaterials() {
 }
 
 // --- 标准件：任务选择 + 结构识别 ---
+$('cal-upload').addEventListener('change', async (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  $('up-status').textContent = `上传解析中：${f.name} …`;
+  const fd = new FormData();
+  fd.append('file', f);
+  try {
+    const r = await (await fetch('/api/upload', {method: 'POST', body: fd})).json();
+    currentJob = r.job_id;
+    $('up-status').textContent = `已上传：${r.summary.layers} 层 / ${r.summary.segments.toLocaleString()} 段 —— 正在识别结构…`;
+    await loadJobs();
+    $('job-sel').value = currentJob;
+    $('job-sel').dispatchEvent(new Event('change'));
+  } catch (e) { $('up-status').textContent = '上传失败：' + e.message; }
+  ev.target.value = '';
+});
+
 async function loadJobs() {
   const jobs = await (await fetch('/api/jobs')).json();
   const sel = $('job-sel');
   sel.innerHTML = jobs.length
     ? jobs.map(j => `<option value="${j.job_id}">${j.name}（${j.layers} 层 · ${j.segments.toLocaleString()} 段）</option>`).join('')
-    : '<option value="">（暂无任务——请先在主页上传 G-code）</option>';
-  if (jobs.length) sel.dispatchEvent(new Event('change'));
+    : '<option value="">（暂无任务——请先上传 G-code）</option>';
+  if (jobs.length && !currentJob) sel.dispatchEvent(new Event('change'));
 }
 
 $('job-sel').addEventListener('change', async () => {
