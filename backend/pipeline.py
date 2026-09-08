@@ -27,6 +27,7 @@ SEG_STRIDE = 40
 @dataclass
 class Job:
     id: str
+    name: str = ""
     status: str = "parsed"          # parsed | simulating | optimizing | done | error
     progress: float = 0.0
     error: str | None = None
@@ -71,12 +72,12 @@ def ingest_bytes(raw: bytes) -> tuple[str, dict, ParsedGcode]:
     return text, settings, parsed
 
 
-def create_job_from_bytes(raw: bytes) -> tuple[str, dict]:
+def create_job_from_bytes(raw: bytes, name: str = "") -> tuple[str, dict]:
     from .gcode.bambu3mf import is_zip_bytes
 
     text, settings, parsed = ingest_bytes(raw)
     job_id = secrets.token_hex(6)
-    job = Job(id=job_id, parsed=parsed, raw_text=text)
+    job = Job(id=job_id, parsed=parsed, raw_text=text, name=name or job_id)
     if is_zip_bytes(raw):
         job.source_zip = raw  # 优化结果将回包为 .gcode.3mf
     job.payload, job.meta = pack_preview(parsed)  # 解析即可预览

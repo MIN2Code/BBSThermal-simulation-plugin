@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>校准芯片 — Thermal Assess</title>
+<title>校准 — Thermal Assess</title>
 <style>
 :root {
   --bg: #14171c; --panel: #1c2129; --panel2: #232a35; --line: #2e3745;
@@ -28,118 +28,160 @@ select, input { background: var(--panel2); color: var(--text); border: 1px solid
 .sec { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
 .sec h4 { margin: 0 0 6px; font-size: 13px; color: var(--dim); font-weight: normal; }
 .sec select { width: 100%; }
+.bad { color: #ff7a6e; } .good { color: var(--ok); }
 #bar { height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; margin: 10px 0; }
 #bar>div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--ok)); transition: width .3s; }
 table { width: 100%; border-collapse: collapse; margin-top: 8px; }
 td, th { padding: 5px 10px; border-bottom: 1px solid var(--line); text-align: left; }
 th { color: var(--dim); font-weight: normal; }
 td b { font-variant-numeric: tabular-nums; }
-.good { color: var(--ok); } .bad { color: #ff7a6e; }
+.hidden { display: none; }
 </style>
 </head>
 <body>
-<h1>校准芯片 <b>Calibration Chip</b></h1>
-<p class="dim">用一次约 15 分钟的打印，标定你这台机器和这卷耗材的真实热参数。
-打印后逐段用手掰断：结合弱的段会沿层裂开（易断），结合好的段掰不动（结实）。
-把每段的结果填进来，引擎会自动拟合参数并存为耗材档案。</p>
+<h1>校准 <b>Calibration</b></h1>
 <p><a href="/">← 返回分析页</a></p>
+<p class="dim">两种标定方式：<b>标准量化测试件</b>（温度塔 / VFA，客观，推荐）与
+<b>掰断芯片</b>（主观强度测试，备用）。两者都会把拟合参数写入耗材档案，
+之后的仿真与优化自动套用。</p>
 
-<h2>① 下载并打印校准件</h2>
+<div id="chip-flow" class="hidden">
+<h2>掰断芯片（备用方式）</h2>
 <div class="card">
   <div class="row">
     <span>材料</span> <select id="material"></select>
-    <a class="btn" id="dl" href="#" download>下载校准 G-code</a>
+    <a class="btn ghost" id="dl" href="#" download>下载校准 G-code</a>
   </div>
-  <p class="dim" style="margin-bottom:0">30×30mm 薄壁方塔，6 段 × 30 层（约 15 分钟）。
-  切片参数随便，**直接把这个 G-code 发到打印机**（它已经是可打印的成品 G-code，不需要再切片）。</p>
 </div>
-
-<h2>② 打印后逐段掰断，填写结果</h2>
 <div class="card">
-  <p class="dim" style="margin:0 0 10px">判据：沿层线一掰就开 = <b style="color:#6f9dff">易断</b>；
-  掰不动或断口拉丝 = <b class="good">结实</b>。从底部第 1 段数到顶部第 6 段。</p>
+  <p class="dim" style="margin:0 0 10px">判据：沿层线一掰就开 = <b>易断</b>；掰不动或断口拉丝 = <b class="good">结实</b>。</p>
   <div class="sec-grid" id="sections"></div>
 </div>
-
-<h2>③ 拟合</h2>
 <div class="card">
   <div class="row">
     <button class="btn" id="fit">开始拟合（约 2~4 分钟）</button>
     <span id="status" class="dim"></span>
   </div>
   <div id="bar"><div></div></div>
-  <div id="result"></div>
+  <div id="chip-result"></div>
+</div>
 </div>
 
-<h2>已保存的耗材档案</h2>
-<div class="card" id="profiles">加载中…</div>
-
-<h2>标准量化测试件（推荐，客观不用掰）</h2>
+<h2>① 上传标准测试件的切片 G-code</h2>
 <div class="card">
-  <b>温度塔（一次打印标定整个结合窗口）</b>
-  <p class="dim" style="margin:6px 0">7 块逐块变喷嘴温度（220→190°C），约 25 分钟。
-  观察每块：层间开裂 = <b style="color:#6f9dff">弱</b>；结合良好 = <b class="good">可用</b>；
-  拉丝/下垂/溢料 = <b style="color:#ff7a6e">过热</b>。完成后逐块填表。</p>
-  <div class="row"><a class="btn ghost" id="dl-tower" href="#" download>下载温度塔 G-code</a></div>
-  <div class="sec-grid" id="tower-blocks" style="margin-top:10px"></div>
-  <div class="row" style="margin-top:10px">
+  <div class="row">
+    <span>任务</span>
+    <select id="job-sel" style="min-width:320px"></select>
+    <button class="btn ghost" id="detect">识别结构</button>
+  </div>
+  <div id="kind" class="dim" style="margin-top:8px">尚未识别。</div>
+</div>
+
+<h2>② 温度塔：逐块评价（需温度块结构）</h2>
+<div class="card" id="tower-form" style="display:none">
+  <p class="dim" style="margin:0 0 10px">判据：层间开裂 = <b>弱</b>；结合良好 = <b>可用</b>；拉丝/下垂/溢料 = <b>过热</b>。</p>
+  <div class="sec-grid" id="tower-blocks"></div>
+  <div class="row" style="margin-top:12px">
     <button class="btn" id="fit-tower">拟合结合窗口</button>
     <span id="tower-status" class="dim"></span>
   </div>
   <div id="tower-result"></div>
 </div>
-<div class="card">
-  <b>VFA 速度塔（标定流量→质量悬崖）</b>
-  <p class="dim" style="margin:6px 0">单壁方管 13 档逐档加速（20→300mm/s），约 10 分钟。
-  观察从哪一档开始出现<b style="color:#ff7a6e">孔洞/细纹/拉丝</b>——那就是这台机器的流量悬崖。</p>
+
+<h2>③ VFA 速度塔：起始瑕疵档（需速度带结构）</h2>
+<div class="card" id="vfa-form" style="display:none">
+  <p class="dim" style="margin:0 0 10px">从哪一档开始出现孔洞/细纹/拉丝——那台机器的流量悬崖。</p>
   <div class="row">
-    <a class="btn ghost" id="dl-vfa" href="#" download>下载 VFA G-code</a>
-    <span>起始瑕疵档</span>
     <select id="vfa-band"></select>
     <button class="btn" id="fit-vfa">拟合流量悬崖</button>
   </div>
   <div id="vfa-result"></div>
 </div>
 
-<script>
-// --- 标准件 ---
-const bandSpeeds = [20, 30, 40, 60, 80, 100, 120, 150, 180, 210, 240, 270, 300];
-$('dl-tower').href = `/api/calibration/tower/download?material=${material}`;
-$('dl-vfa').href = `/api/calibration/vfa/download?material=${material}`;
-$('vfa-band').innerHTML = bandSpeeds.map((s, i) => `<option value="${i+1}">第 ${i+1} 档（${s}mm/s）</option>`).join('');
-$('tower-blocks').innerHTML = temps_default = [220,215,210,205,200,195,190].map((t, i) => `
-  <div class="sec">
-    <h4>第 ${i+1} 块 · ${t}°C</h4>
-    <select id="tb${i+1}">
-      <option value="">— 未测 —</option>
-      <option value="weak">弱（层间开裂）</option>
-      <option value="ok">可用</option>
-      <option value="hot">过热（拉丝下垂）</option>
-    </select>
-  </div>`).join('');
+<h2>已保存的耗材档案</h2>
+<div class="card" id="profiles">加载中…</div>
 
-$('material').addEventListener('change', () => {
-  material = $('material').value;
+<script>
+const $ = (id) => document.getElementById(id);
+let currentJob = null, currentKind = null;
+
+async function loadMaterials() {
+  const mats = await (await fetch('/api/materials')).json();
+  const sel = $('material');
+  sel.innerHTML = mats.map(m => `<option value="${m.name}">${m.name}</option>`).join('');
+  $('dl').href = `/api/calibration/chip/download?material=${material}`;
   $('dl-tower').href = `/api/calibration/tower/download?material=${material}`;
   $('dl-vfa').href = `/api/calibration/vfa/download?material=${material}`;
+}
+
+// --- 标准件：任务选择 + 结构识别 ---
+async function loadJobs() {
+  const jobs = await (await fetch('/api/jobs')).json();
+  const sel = $('job-sel');
+  sel.innerHTML = jobs.length
+    ? jobs.map(j => `<option value="${j.job_id}">${j.name}（${j.layers} 层 · ${j.segments.toLocaleString()} 段）</option>`).join('')
+    : '<option value="">（暂无任务——请先在主页上传 G-code）</option>';
+  if (jobs.length) sel.dispatchEvent(new Event('change'));
+}
+
+$('job-sel').addEventListener('change', async () => {
+  currentJob = $('job-sel').value; currentKind = null;
+  $('kind').textContent = '识别中…';
+  $('tower-form').style.display = 'none';
+  $('vfa-form').style.display = 'none';
+  try {
+    const st = await (await fetch(`/api/calibration/structure/${currentJob}`)).json();
+    if (st.kind === 'temp_tower' && st.blocks.length >= 2) {
+      currentKind = 'temp_tower';
+      $('kind').textContent = `识别为温度塔：${st.blocks.length} 个温度块（${st.blocks.map(b => b.temp + '°C').join(' / ')}）`;
+      renderTowerForm(st.blocks);
+    } else if (st.kind === 'vfa' && st.bands.length >= 2) {
+      currentKind = 'vfa';
+      $('kind').textContent = `识别为 VFA 速度塔：${st.bands.length} 个速度带（${st.bands[0].speed}→${st.bands[st.bands.length-1].speed}mm/s）`;
+      renderVfaForm(st.bands);
+    } else {
+      $('kind').textContent = '未识别出温度块/速度带结构——请确认这是塔类测试件的切片。';
+    }
+  } catch (e) { $('kind').textContent = '识别失败：' + e.message; }
 });
 
+function renderTowerForm(blocks) {
+  $('tower-blocks').innerHTML = blocks.map(b => `
+    <div class="sec">
+      <h4>第 ${b.index} 块 · ${b.temp}°C</h4>
+      <select id="tb${b.index}">
+        <option value="">— 未测 —</option>
+        <option value="weak">弱（层间开裂）</option>
+        <option value="ok">可用</option>
+        <option value="hot">过热（拉丝下垂）</option>
+      </select>
+    </div>`).join('');
+  $('tower-form').style.display = 'block';
+}
+
+function renderVfaForm(bands) {
+  $('vfa-band').innerHTML = bands.map(b =>
+    `<option value="${b.speed}">第 ${b.band} 档（${b.speed}mm/s）</option>`).join('');
+  $('vfa-form').style.display = 'block';
+}
+
+// --- 温度塔拟合 ---
 $('fit-tower').addEventListener('click', async () => {
   const outcomes = {};
-  for (let i = 1; i <= 7; i++) {
-    const v = $(`tb${i}`).value;
-    if (v) outcomes[i] = v;
-  }
-  if (Object.keys(outcomes).length < 3) { alert('至少填写 3 块评价'); return; }
+  $('tower-blocks').querySelectorAll('select').forEach(sel => {
+    if (sel.value) outcomes[sel.id.replace('tb', '')] = sel.value;
+  });
+  if (Object.keys(outcomes).length < 2) { alert('至少填写 2 块评价'); return; }
   $('fit-tower').disabled = true;
   $('tower-status').textContent = '拟合中…';
   try {
     const {fit_id} = await (await fetch('/api/calibration/tower/fit', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({material, outcomes})
+      body: JSON.stringify({job_id: currentJob, outcomes})
     })).json();
     for (;;) {
       const j = await (await fetch(`/api/calibration/fit/${fit_id}`)).json();
+      $('bar').firstElementChild.style.width = `${Math.round((j.progress||0)*100)}%`;
       $('tower-status').textContent = j.status === 'done' ? '完成'
         : j.status === 'error' ? '出错：' + j.error : `拟合中 ${(j.progress*100).toFixed(0)}%`;
       if (j.status === 'done') { renderTower(j.report); loadProfiles(); break; }
@@ -162,20 +204,19 @@ function renderTower(rep) {
         <tr><th>窗口参数</th><th>拟合值</th></tr>
         <tr><td>T_bond（弱/可用边界）</td><td><b>${rep.t_bond}°C</b></td></tr>
         <tr><td>T_sag（可用/过热边界）</td><td><b>${rep.t_sag}°C</b></td></tr>
-        <tr><td>κ / η</td><td><b>${rep.kappa} / ${rep.eta}</b></td></tr>
         <tr><td>与观测一致率</td><td><b class="good">${(rep.agreement*100).toFixed(0)}%</b></td></tr>
       </table>
-      <p class="dim" style="margin-bottom:0">各块预测界面温度：${rep.block_iface.join(' / ')} °C
-      —— 已存入「${rep.material}」档案（窗口两端同步更新）。</p>
+      <p class="dim" style="margin-bottom:0">已存入「${rep.material}」档案（窗口两端同步更新），之后仿真与优化自动套用。</p>
     </div>`;
 }
 
+// --- VFA 拟合 ---
 $('fit-vfa').addEventListener('click', async () => {
-  const band = parseInt($('vfa-band').value, 10);
+  const onset = parseFloat($('vfa-band').value);
   try {
     const rep = await (await fetch('/api/calibration/vfa/fit', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({material, onset_band: band})
+      body: JSON.stringify({job_id: currentJob, onset_speed: onset})
     })).json();
     $('vfa-result').innerHTML = `
       <div class="card">
@@ -185,23 +226,8 @@ $('fit-vfa').addEventListener('click', async () => {
     loadProfiles();
   } catch (e) { $('vfa-result').innerHTML = `<div class="card bad">失败：${e.message}</div>`; }
 });
-</script>
 
-<script>
-const $ = (id) => document.getElementById(id);
-let material = 'PLA';
-
-async function loadMaterials() {
-  const mats = await (await fetch('/api/materials')).json();
-  $('material').innerHTML = mats.map(m => `<option value="${m.name}">${m.name}</option>`).join('');
-  material = 'PLA';
-  $('dl').href = `/api/calibration/chip/download?material=${material}`;
-  $('material').addEventListener('change', e => {
-    material = e.target.value;
-    $('dl').href = `/api/calibration/chip/download?material=${material}`;
-  });
-}
-
+// --- 掰断芯片（隐藏的备用方式）---
 const SEC_INFO = [
   {fan: '0%', feed: '慢速'}, {fan: '0%', feed: '快速'},
   {fan: '50%', feed: '慢速'}, {fan: '50%', feed: '快速'},
@@ -227,33 +253,25 @@ $('fit').addEventListener('click', async () => {
   $('fit').disabled = true;
   $('status').textContent = '提交中…';
   try {
-    const r = await fetch('/api/calibration/fit', {
+    const {fit_id} = await (await fetch('/api/calibration/fit', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({material, outcomes})
-    });
-    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
-    const {fit_id} = await r.json();
-    await poll(fit_id);
-  } catch (e) {
-    $('status').textContent = '失败：' + e.message;
-    $('fit').disabled = false;
-  }
+    })).json();
+    for (;;) {
+      const j = await (await fetch(`/api/calibration/fit/${fit_id}`)).json();
+      $('bar').firstElementChild.style.width = `${Math.round((j.progress||0)*100)}%`;
+      $('status').textContent = j.status === 'done' ? '完成'
+        : j.status === 'error' ? '出错：' + j.error : `拟合中 ${(j.progress*100).toFixed(0)}%`;
+      if (j.status === 'done') { renderChipResult(j.report); loadProfiles(); $('fit').disabled = false; return; }
+      if (j.status === 'error') { $('status').textContent = '出错：' + j.error; $('fit').disabled = false; return; }
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  } catch (e) { $('status').textContent = '失败：' + e.message; $('fit').disabled = false; }
 });
 
-async function poll(id) {
-  for (;;) {
-    const j = await (await fetch(`/api/calibration/fit/${id}`)).json();
-    $('bar').firstElementChild.style.width = `${Math.round((j.progress||0)*100)}%`;
-    $('status').textContent = j.status === 'done' ? '完成'
-      : j.status === 'error' ? '出错' : `拟合中 ${(j.progress*100).toFixed(0)}%`;
-    if (j.status === 'done') { renderResult(j.report); loadProfiles(); $('fit').disabled = false; return; }
-    if (j.status === 'error') { $('status').textContent = '出错：' + j.error; $('fit').disabled = false; return; }
-    await new Promise(r => setTimeout(r, 1500));
-  }
-}
-
-function renderResult(rep) {
-  const el = $('result');
+function renderChipResult(rep) {
+  const el = $('chip-result');
+  if (!el) return;
   if (!rep.ok) {
     el.innerHTML = `<div class="card"><b class="bad">无法一致拟合</b><p>${rep.diagnosis || ''}</p></div>`;
     return;
@@ -261,16 +279,11 @@ function renderResult(rep) {
   el.innerHTML = `
     <div class="card">
       <table>
-        <tr><th></th><th>拟合值</th></tr>
-        <tr><td>结合阈值 T_bond（低于此温度层间为弱结合）</td><td><b>${rep.bond_threshold}°C</b></td></tr>
-        <tr><td>接触再热 κ</td><td><b>${rep.kappa}</b></td></tr>
-        <tr><td>喷嘴驻留热 η</td><td><b>${rep.eta}</b></td></tr>
-        <tr><td>风扇散热倍率</td><td><b>×${rep.hfan}</b></td></tr>
-        <tr><td>与观测一致率</td><td><b class="good">${(rep.agreement*100).toFixed(0)}%</b></td></tr>
-        <tr><td>参数可行组合数</td><td><b>${rep.n_feasible} / ${rep.n_combinations}</b></td></tr>
+        <tr><th>结合阈值 T_bond</th><td><b>${rep.bond_threshold}°C</b></td></tr>
+        <tr><td>κ / η / 风扇倍率</td><td><b>${rep.kappa} / ${rep.eta} / ×${rep.hfan}</b></td></tr>
+        <tr><td>一致率</td><td><b>${(rep.agreement*100).toFixed(0)}%</b></td></tr>
       </table>
-      <p class="dim" style="margin-bottom:0">各段预测界面温度（°C）：${rep.section_iface.join(' / ')}
-      —— 已存为「${rep.material}」耗材档案，之后仿真和优化会自动套用。</p>
+      <p class="dim">已存入「${rep.material}」档案。</p>
     </div>`;
 }
 
@@ -283,8 +296,19 @@ async function loadProfiles() {
     </table>` : '<span class="dim">还没有档案 —— 完成一次校准后自动生成</span>';
 }
 
-loadMaterials();
-loadProfiles();
+async function init() {
+  await loadMaterials();
+  $('dl').href = `/api/calibration/chip/download?material=${material}`;
+  $('material').addEventListener('change', e => {
+    material = e.target.value;
+    $('dl').href = `/api/calibration/chip/download?material=${material}`;
+    $('dl-tower').href = `/api/calibration/tower/download?material=${material}`;
+    $('dl-vfa').href = `/api/calibration/vfa/download?material=${material}`;
+  });
+  await loadJobs();
+  loadProfiles();
+}
+init();
 </script>
 </body>
 </html>

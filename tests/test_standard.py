@@ -6,8 +6,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from backend.calibration.detect import detect_nozzle_blocks
 from backend.calibration.standard import generate_temp_tower, generate_vfa
-from backend.calibration.standard_fit import fit_temp_tower
+from backend.calibration.standard_fit import block_iface_medians, fit_temp_tower_gcode
 from backend.gcode.parser import parse_gcode
 from backend.thermal.materials import get_material
 from backend.thermal.voxel import SimConfig, ThermalSimulator
@@ -54,14 +55,8 @@ def test_tower_fit_roundtrip():
     cfg = SimConfig(voxel_mm=1.0, iface_reheat=theta["kappa"], nozzle_heat=theta["eta"])
     res = ThermalSimulator(p, mat, cfg).run()
 
-    # 每块预测界面温度（与 standard_fit 同规则：块内后 80%）
-    z = p.geometry[:, 5]
-    block_iface = []
-    for blk in manifest["blocks"]:
-        sel = (z >= blk["z_from"]) & (z < blk["z_to"]) & res.tqi_valid
-        idx = np.where(sel)[0]
-        keep = idx[int(len(idx) * 0.2):] if len(idx) > 5 else idx
-        block_iface.append(float(np.median(res.iface_temp[keep])))
+    blocks = detect_nozzle_blocks(p)
+    block_iface = block_iface_medians(p, res, blocks)
     bi_sorted = np.argsort(block_iface)
     # 阈值取最小/最大 iface 的中点 → 产生弱/可用/过热三级的观测
     weak_iface = block_iface[bi_sorted[0]]
@@ -77,8 +72,7 @@ def test_tower_fit_roundtrip():
         else:
             outcomes[bi] = "ok"
 
-    report = fit_temp_tower(outcomes, mat, block_layers=40,
-                            progress_cb=None)
+    report = fit_temp_tower_gcode(p, res, outcomes)
     assert report["ok"], f"真值参数应可行: {report.get('diagnosis', '')}"
     assert report["agreement"] >= 0.8
     # 拟合出的窗口应把弱/过热块分开
