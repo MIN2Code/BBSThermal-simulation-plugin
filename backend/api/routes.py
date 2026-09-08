@@ -4,9 +4,26 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import Response
 
-from .. import pipeline
+from .. import bs_switch, pipeline
 
 router = APIRouter(prefix="/api")
+
+
+@router.get("/bsconfig")
+def bs_config_state():
+    """Bambu Studio Helio 端点当前指向（local/helio）与运行状态。"""
+    return bs_switch.read_state()
+
+
+@router.post("/bsconfig")
+def bs_config_switch(payload: dict):
+    """切换 Bambu Studio 的 Helio 端点：mode = 'local' | 'helio'。"""
+    mode = payload.get("mode")
+    try:
+        result = bs_switch.apply_mode(mode, pat=payload.get("pat"))
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return result
 
 
 @router.get("/materials")

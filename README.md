@@ -45,6 +45,8 @@ helio_enable = true
 
 之后在 Bambu Studio 中正常切片、点击 Helio 按钮：热指数仿真与速度优化全部由本地引擎完成，结果显示在 Bambu Studio 原生界面。引擎未启动时仅 Helio 功能不可用，不影响切片。
 
+**本地 ⇄ 官方 Helio 一键切换**：主界面顶栏的「BS Helio 端点」开关可在本地引擎与官方 Helio 云之间切换（切换前会自动备份/还原你的官方 PAT）。切换前需完全关闭 Bambu Studio，切换后重启 Bambu Studio 生效；命令行等价操作为 `python bridge\patch_bs_config.py local|helio|status`。
+
 也可以只用无界面的后处理脚本桥接（切片完成后自动提交分析并打开浏览器）：
 
 ```
@@ -111,7 +113,7 @@ tests/          28 项单元测试
 samples/        合成测试 G-code
 ```
 
-## 已知限制（诚实版）
+## 当前限制
 
 - TQI 绝对值未经实物标定前仅供参考；风险区域的位置与相对排序可靠
 - 时间估计未建模加减速，比真实打印偏快 ~20%

@@ -1,76 +1,44 @@
-"""Bambu Studio 配置修补：把 Helio 集成指向本地引擎并注入本地 PAT。
+"""Bambu Studio Helio 端点切换器（命令行版）。
 
-用法：先完全关闭 Bambu Studio，然后运行：
-    python patch_bs_config.py
-会修改 %APPDATA%\\BambuStudio\\BambuStudio.conf：
-    helio_api_china / helio_api_other → http://127.0.0.1:8760/graphql/helio
-    helio_pat_china  / helio_pat_other → local-pat（本地引擎不校验，非空即可）
-    helio_enable → true
-幂等：重复运行无副作用。
+用法：
+    python patch_bs_config.py            # 切到本地引擎
+    python patch_bs_config.py local      # 同上
+    python patch_bs_config.py helio      # 切回官方 Helio 云（自动还原备份的官方 PAT）
+    python patch_bs_config.py status     # 查看当前指向
+
+也可在网页主界面顶栏的「BS Helio 端点」开关直接切换。
 """
+import json
 import os
+import sys
 
-CONF = os.path.join(os.environ.get("APPDATA", ""), "BambuStudio", "BambuStudio.conf")
-LOCAL_URL = "http://127.0.0.1:8760/graphql/helio"
-PAT = "local-pat"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-UPDATES = {
-    "helio_api_china": LOCAL_URL,
-    "helio_api_other": LOCAL_URL,
-    "helio_pat_china": PAT,
-    "helio_pat_other": PAT,
-    "helio_enable": "true",
-}
+from backend.bs_switch import apply_mode, read_state  # noqa: E402
 
 
 def main() -> int:
-    if not os.path.exists(CONF):
-        print(f"未找到配置文件: {CONF}")
+    mode = sys.argv[1].lower() if len(sys.argv) > 1 else "local"
+    if mode == "status":
+        print(json.dumps(read_state(), ensure_ascii=False, indent=1))
+        return 0
+    if mode not in ("local", "helio"):
+        print(f"未知模式: {mode}（可用: local / helio / status）", file=sys.stderr)
         return 1
-    with open(CONF, "r", encoding="utf-8") as f:
-        lines = f.read().splitlines()
-
-    pending = dict(UPDATES)
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if '":"' not in stripped and '":' not in stripped:
-            continue
-        head, _, tail = line.strip().partition('":')
-        key = head.lstrip('"').strip()
-        if key in pending:
-            indent = line[: len(line) - len(line.lstrip())]
-            val = pending.pop(key)
-            formatted = val if val in ("true", "false") else f'"{val}"'
-            lines[i] = f'{indent}"{key}": {formatted},'
-    # 未存在的键：插入到 helio_api_china 行之后（或文件首个键附近）
-    if pending:
-        insert_at = None
-        for i, line in enumerate(lines):
-            if '"helio_api_china"' in line:
-                insert_at = i + 1
-                break
-        if insert_at is None:
-            for i, line in enumerate(lines):
-                if line.strip().startswith('"'):
-                    insert_at = i
-                    break
-        for key, val in reversed(list(pending.items())):
-            indent = '        '
-            formatted = val if val in ("true", "false") else f'"{val}"'
-            lines.insert(insert_at, f'{indent}"{key}": {formatted},')
-
-    with open(CONF, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-
-    print("已写入以下配置：")
-    for key, val in UPDATES.items():
-        print(f"  {key} = {val}")
-    print(f"\n配置文件: {CONF}")
-    print("现在可以启动 Bambu Studio 了。")
+    result = apply_mode(mode)
+    if not result.get("applied"):
+        print(f"未应用: {result.get('warning')}", file=sys.stderr)
+        return 2
+    state = read_state()
+    print(f"已切换到: {mode}")
+    print(f"  helio_api_china = {state['keys'].get('helio_api_china')}")
+    print(f"  helio_api_other = {state['keys'].get('helio_api_other')}")
+    print(f"  helio_pat = {'local-pat' if mode == 'local' else '（已还原备份的官方 PAT）'}")
+    if result.get("warning"):
+        print(f"注意: {result['warning']}")
+    print("请启动（或重启）Bambu Studio 生效。")
     return 0
 
 
 if __name__ == "__main__":
-    sys_exit = main()
-    import sys
-    sys.exit(sys_exit)
+    sys.exit(main())
