@@ -27,12 +27,14 @@ HELIO_KEYS = ("helio_api_china", "helio_api_other",
 
 
 def bs_running() -> bool:
+    # 注意进程名：新版 Bambu Studio 是 bambu-studio.exe（小写连字符），
+    # 旧版/其他发行可能是 BambuStudio.exe——全量列表小写后同时匹配两者。
     try:
         out = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq BambuStudio.exe"],
-            capture_output=True, text=True, encoding="gbk", errors="replace", timeout=15,
-        ).stdout
-        return "BambuStudio.exe" in out
+            ["tasklist"], capture_output=True, text=True,
+            encoding="gbk", errors="replace", timeout=15,
+        ).stdout.lower()
+        return "bambu-studio.exe" in out or "bambustudio.exe" in out
     except Exception:  # noqa: BLE001
         return False  # 探测失败按未运行处理（让用户自己确认）
 

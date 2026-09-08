@@ -245,6 +245,7 @@ async def graphql(request: Request):
 
     if "createGcodeV2" in query:
         inp = variables.get("input", {})
+        _log_request("createGcodeV2", variables)
         key = inp.get("gcodeKey", "")
         upload_id = key.split("/")[0] if "/" in key else key
         data = UPLOADS.get(upload_id, b"")
