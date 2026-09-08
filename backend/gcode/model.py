@@ -85,6 +85,7 @@ class ParsedGcode:
     helio_ti: np.ndarray | None = None  # (N,) float32 Helio 逐段热指数（无标注为 NaN）
     src_line: np.ndarray | None = None  # (N,) int32 每段来源行号（G-code 回写用）
     travel_before: np.ndarray | None = None  # (N,) float32 段前空走/驻留时间（重计时用）
+    nozzle_seg: np.ndarray | None = None  # (N,) float32 每段喷嘴温度（变温打印，如温度塔）
 
     @property
     def num_segments(self) -> int:

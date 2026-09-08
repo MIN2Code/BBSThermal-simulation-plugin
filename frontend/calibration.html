@@ -74,6 +74,119 @@ td b { font-variant-numeric: tabular-nums; }
 <h2>已保存的耗材档案</h2>
 <div class="card" id="profiles">加载中…</div>
 
+<h2>标准量化测试件（推荐，客观不用掰）</h2>
+<div class="card">
+  <b>温度塔（一次打印标定整个结合窗口）</b>
+  <p class="dim" style="margin:6px 0">7 块逐块变喷嘴温度（220→190°C），约 25 分钟。
+  观察每块：层间开裂 = <b style="color:#6f9dff">弱</b>；结合良好 = <b class="good">可用</b>；
+  拉丝/下垂/溢料 = <b style="color:#ff7a6e">过热</b>。完成后逐块填表。</p>
+  <div class="row"><a class="btn ghost" id="dl-tower" href="#" download>下载温度塔 G-code</a></div>
+  <div class="sec-grid" id="tower-blocks" style="margin-top:10px"></div>
+  <div class="row" style="margin-top:10px">
+    <button class="btn" id="fit-tower">拟合结合窗口</button>
+    <span id="tower-status" class="dim"></span>
+  </div>
+  <div id="tower-result"></div>
+</div>
+<div class="card">
+  <b>VFA 速度塔（标定流量→质量悬崖）</b>
+  <p class="dim" style="margin:6px 0">单壁方管 13 档逐档加速（20→300mm/s），约 10 分钟。
+  观察从哪一档开始出现<b style="color:#ff7a6e">孔洞/细纹/拉丝</b>——那就是这台机器的流量悬崖。</p>
+  <div class="row">
+    <a class="btn ghost" id="dl-vfa" href="#" download>下载 VFA G-code</a>
+    <span>起始瑕疵档</span>
+    <select id="vfa-band"></select>
+    <button class="btn" id="fit-vfa">拟合流量悬崖</button>
+  </div>
+  <div id="vfa-result"></div>
+</div>
+
+<script>
+// --- 标准件 ---
+const bandSpeeds = [20, 30, 40, 60, 80, 100, 120, 150, 180, 210, 240, 270, 300];
+$('dl-tower').href = `/api/calibration/tower/download?material=${material}`;
+$('dl-vfa').href = `/api/calibration/vfa/download?material=${material}`;
+$('vfa-band').innerHTML = bandSpeeds.map((s, i) => `<option value="${i+1}">第 ${i+1} 档（${s}mm/s）</option>`).join('');
+$('tower-blocks').innerHTML = temps_default = [220,215,210,205,200,195,190].map((t, i) => `
+  <div class="sec">
+    <h4>第 ${i+1} 块 · ${t}°C</h4>
+    <select id="tb${i+1}">
+      <option value="">— 未测 —</option>
+      <option value="weak">弱（层间开裂）</option>
+      <option value="ok">可用</option>
+      <option value="hot">过热（拉丝下垂）</option>
+    </select>
+  </div>`).join('');
+
+$('material').addEventListener('change', () => {
+  material = $('material').value;
+  $('dl-tower').href = `/api/calibration/tower/download?material=${material}`;
+  $('dl-vfa').href = `/api/calibration/vfa/download?material=${material}`;
+});
+
+$('fit-tower').addEventListener('click', async () => {
+  const outcomes = {};
+  for (let i = 1; i <= 7; i++) {
+    const v = $(`tb${i}`).value;
+    if (v) outcomes[i] = v;
+  }
+  if (Object.keys(outcomes).length < 3) { alert('至少填写 3 块评价'); return; }
+  $('fit-tower').disabled = true;
+  $('tower-status').textContent = '拟合中…';
+  try {
+    const {fit_id} = await (await fetch('/api/calibration/tower/fit', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({material, outcomes})
+    })).json();
+    for (;;) {
+      const j = await (await fetch(`/api/calibration/fit/${fit_id}`)).json();
+      $('tower-status').textContent = j.status === 'done' ? '完成'
+        : j.status === 'error' ? '出错：' + j.error : `拟合中 ${(j.progress*100).toFixed(0)}%`;
+      if (j.status === 'done') { renderTower(j.report); loadProfiles(); break; }
+      if (j.status === 'error') { $('tower-status').textContent = '出错：' + j.error; break; }
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  } catch (e) { $('tower-status').textContent = '失败：' + e.message; }
+  $('fit-tower').disabled = false;
+});
+
+function renderTower(rep) {
+  const el = $('tower-result');
+  if (!rep.ok) {
+    el.innerHTML = `<div class="card"><b class="bad">无法一致拟合</b><p>${rep.diagnosis || ''}</p></div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="card">
+      <table>
+        <tr><th>窗口参数</th><th>拟合值</th></tr>
+        <tr><td>T_bond（弱/可用边界）</td><td><b>${rep.t_bond}°C</b></td></tr>
+        <tr><td>T_sag（可用/过热边界）</td><td><b>${rep.t_sag}°C</b></td></tr>
+        <tr><td>κ / η</td><td><b>${rep.kappa} / ${rep.eta}</b></td></tr>
+        <tr><td>与观测一致率</td><td><b class="good">${(rep.agreement*100).toFixed(0)}%</b></td></tr>
+      </table>
+      <p class="dim" style="margin-bottom:0">各块预测界面温度：${rep.block_iface.join(' / ')} °C
+      —— 已存入「${rep.material}」档案（窗口两端同步更新）。</p>
+    </div>`;
+}
+
+$('fit-vfa').addEventListener('click', async () => {
+  const band = parseInt($('vfa-band').value, 10);
+  try {
+    const rep = await (await fetch('/api/calibration/vfa/fit', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({material, onset_band: band})
+    })).json();
+    $('vfa-result').innerHTML = `
+      <div class="card">
+        <b>流量悬崖：</b>起始瑕疵档 ${rep.onset_speed}mm/s（${rep.onset_flow}mm³/s）<br>
+        <span class="dim">流量降额曲线已更新：ref=${rep.flow_ref} span=${rep.flow_span} mm³/s，已存入档案。</span>
+      </div>`;
+    loadProfiles();
+  } catch (e) { $('vfa-result').innerHTML = `<div class="card bad">失败：${e.message}</div>`; }
+});
+</script>
+
 <script>
 const $ = (id) => document.getElementById(id);
 let material = 'PLA';

@@ -111,6 +111,7 @@ def parse_gcode(text: str) -> ParsedGcode:
     helio_list: list[float] = []
     src_line_list: list[int] = []
     travel_list: list[float] = []
+    nozzle_list: list[float] = []
 
     layer_z_seq: list[float] = []
     layer_t0_seq: list[float] = []
@@ -136,6 +137,7 @@ def parse_gcode(text: str) -> ParsedGcode:
 
     last_end = [0.0]   # 上一挤出段的结束时刻（计算段前空走用）
     cur_line = [0]     # 当前源文件行号（G-code 回写用）
+    cur_nozzle = [None]  # 当前喷嘴温度（M104/M109 变温打印，如温度塔）
 
     def emit(x0: float, y0: float, z0: float, x1: float, y1: float, z1: float,
              de: float, feed: float) -> None:
@@ -158,6 +160,7 @@ def parse_gcode(text: str) -> ParsedGcode:
         helio_list.append(st.helio_ti if st.helio_ti is not None else float("nan"))
         src_line_list.append(cur_line[0])
         travel_list.append(max(travel, 0.0))
+        nozzle_list.append(cur_nozzle[0] if cur_nozzle[0] is not None else info.nozzle_temp)
         if st.layer_idx >= len(layer_last_t):
             # 兜底：段所属层未被记录（理论上不应发生）
             while len(layer_last_t) <= st.layer_idx:
@@ -435,6 +438,9 @@ def parse_gcode(text: str) -> ParsedGcode:
             st.expect_layer_z = True
         elif cmd == 623:  # 层结束标记
             close_last_layer()
+        elif cmd in (104, 109):  # M104/M109 设定喷嘴温度（温度塔等变温打印）
+            if "S" in words:
+                cur_nozzle[0] = words["S"]
 
     close_last_layer()
 
@@ -476,6 +482,7 @@ def parse_gcode(text: str) -> ParsedGcode:
         helio_ti=helio_arr,
         src_line=np.asarray(src_line_list, dtype=np.int32),
         travel_before=np.asarray(travel_list, dtype=np.float32),
+        nozzle_seg=np.asarray(nozzle_list, dtype=np.float32),
     )
 
 

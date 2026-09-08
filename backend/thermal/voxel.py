@@ -302,10 +302,14 @@ class ThermalSimulator:
         seg_dur = p.duration[self._order]
         seg_layer_t0 = p.layer_t0[p.layer_idx[self._order]]
         layer0 = p.layer_idx[self._order] == 0
-        # 有效熔温：体积流量大 → 喷嘴吸热不足 → 出口温度低于设定值
+        # 有效熔温：体积流量大 → 喷嘴吸热不足 → 出口温度低于设定值；
+        # 喷嘴温度逐段取值（支持温度塔等变温打印的 M104/M109）
         cfg = self.cfg
+        seg_nozzle = (p.nozzle_seg[self._order].astype(np.float64)
+                      if p.nozzle_seg is not None else np.full(len(seg_t := p.t_mid[self._order]), m.nozzle))
+        seg_nozzle = np.where(seg_nozzle > 100, seg_nozzle, m.nozzle)  # M104 S0 等无效值兜底
         flow = seg_vol / np.maximum(seg_dur, 1e-3)
-        t_dep_all = float(m.nozzle) - cfg.flow_derate * np.clip(
+        t_dep_all = seg_nozzle - cfg.flow_derate * np.clip(
             (flow - cfg.flow_ref) / max(cfg.flow_span, 1e-6), 0.0, 1.0
         )
 

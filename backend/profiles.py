@@ -13,7 +13,7 @@ from dataclasses import replace
 PROFILES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profiles")
 
 # 档案里可覆盖到 SimConfig 的键
-_CFG_KEYS = ("iface_reheat", "nozzle_heat")
+_CFG_KEYS = ("iface_reheat", "nozzle_heat", "flow_ref", "flow_span")
 
 
 def profile_path(name: str) -> str:
@@ -68,15 +68,18 @@ def apply_profile(material, cfg, profile: dict | None):
     """把档案参数套用到 (Material, SimConfig)，返回 (material2, cfg2)。
 
     档案键：iface_reheat/nozzle_heat → SimConfig；hfan → h_conv_on 缩放；
-    cold_below/ideal_lo → 材料结合窗口。
+    cold_below/ideal_lo/ideal_hi → 材料结合窗口；flow_ref/flow_span → 流量降额曲线。
     """
     if not profile:
         return material, cfg
     material = replace(material,
                        h_conv_on=material.h_conv_on * float(profile.get("hfan", 1.0)),
                        cold_below=float(profile.get("cold_below", material.cold_below)),
-                       ideal_lo=float(profile.get("ideal_lo", material.ideal_lo)))
+                       ideal_lo=float(profile.get("ideal_lo", material.ideal_lo)),
+                       ideal_hi=float(profile.get("ideal_hi", material.ideal_hi)))
     cfg = replace(cfg,
                   iface_reheat=float(profile.get("iface_reheat", cfg.iface_reheat)),
-                  nozzle_heat=float(profile.get("nozzle_heat", cfg.nozzle_heat)))
+                  nozzle_heat=float(profile.get("nozzle_heat", cfg.nozzle_heat)),
+                  flow_ref=float(profile.get("flow_ref", cfg.flow_ref)),
+                  flow_span=float(profile.get("flow_span", cfg.flow_span)))
     return material, cfg
