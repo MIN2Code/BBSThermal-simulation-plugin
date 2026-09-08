@@ -146,7 +146,7 @@ $('cal-upload').addEventListener('change', async (ev) => {
 });
 
 async function loadJobs() {
-  const jobs = await (await fetch('/api/jobs')).json();
+  const jobs = await (await fetch('/api/calibration/jobs')).json();
   const sel = $('job-sel');
   sel.innerHTML = jobs.length
     ? jobs.map(j => `<option value="${j.job_id}">${j.name}（${j.layers} 层 · ${j.segments.toLocaleString()} 段）</option>`).join('')
@@ -161,11 +161,11 @@ $('job-sel').addEventListener('change', async () => {
   $('vfa-form').style.display = 'none';
   try {
     const st = await (await fetch(`/api/calibration/structure/${currentJob}`)).json();
-    if (st.kind === 'temp_tower' && st.blocks.length >= 2) {
+    if (st.kind === "temp_tower" && (st.blocks || []).length >= 2) {
       currentKind = 'temp_tower';
       $('kind').textContent = `识别为温度塔：${st.blocks.length} 个温度块（${st.blocks.map(b => b.temp + '°C').join(' / ')}）`;
       renderTowerForm(st.blocks);
-    } else if (st.kind === 'vfa' && st.bands.length >= 2) {
+    } else if (st.kind === 'vfa' && (st.bands || []).length >= 2) {
       currentKind = 'vfa';
       $('kind').textContent = `识别为 VFA 速度塔：${st.bands.length} 个速度带（${st.bands[0].speed}→${st.bands[st.bands.length-1].speed}mm/s）`;
       renderVfaForm(st.bands);
@@ -174,7 +174,7 @@ $('job-sel').addEventListener('change', async () => {
       $('kind').textContent = '该切片速度均匀——请在下方直接填写打印时出现瑕疵的实际速度。';
       $('vfa-form').style.display = 'none';
       $('vfa-manual').style.display = 'block';
-      const sp = st.bands.length ? st.bands[0].speed : null;
+      const sp = (st.bands || []).length ? st.bands[0].speed : null;
       if (sp) $('vfa-onset-manual').value = sp;
     }
   } catch (e) { $('kind').textContent = '识别失败：' + e.message; }
