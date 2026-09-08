@@ -130,6 +130,10 @@ if _HAS_NUMBA:
 
 
 # ---------------------------------------------------------------------------
+class SimulationCancelled(Exception):
+    """外部请求中断仿真/优化（前端停止按钮、任务清理）。"""
+
+
 class ThermalSimulator:
     def __init__(
         self,
@@ -137,11 +141,13 @@ class ThermalSimulator:
         material: Material,
         config: SimConfig | None = None,
         progress_cb: Callable[[float], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         self.p = parsed
         self.m = material
         self.cfg = config or SimConfig()
         self.progress_cb = progress_cb
+        self.cancel_check = cancel_check
         if self.cfg.chamber_temp is None:
             # 腔温估计：热床对腔体加热的保守折中
             self.cfg.chamber_temp = min(0.3 * material.bed + self.cfg.ambient_temp, 45.0)
@@ -403,6 +409,8 @@ class ThermalSimulator:
             n_bucket += 1
             if self.progress_cb and (n_bucket % 8 == 0 or j >= n_seg):
                 self.progress_cb(j / n_seg)
+            if self.cancel_check is not None and n_bucket % 8 == 0 and self.cancel_check():
+                raise SimulationCancelled("仿真已被用户中断")
             i = j
 
         return iface_out

@@ -69,6 +69,15 @@ def job_status(job_id: str):
     }
 
 
+@router.post("/job/{job_id}/cancel")
+def cancel(job_id: str):
+    try:
+        accepted = pipeline.cancel_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"ok": True, "accepted": accepted}
+
+
 @router.get("/preview/{job_id}/meta")
 def preview_meta(job_id: str):
     try:

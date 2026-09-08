@@ -146,3 +146,32 @@ def test_progress_called_and_result_meta():
     assert res.runtime_s > 0
     assert len(res.layer_stats) == 8
     assert res.grid_shape and len(res.grid_shape) == 3
+
+
+def test_simulation_cancelled():
+    """cancel_check 恒真 → 仿真应抛 SimulationCancelled 而非跑完。"""
+    from backend.thermal.voxel import SimulationCancelled
+
+    p = parse_gcode(generate_box_gcode(layers=8, size=20, feed=30))
+    mat = get_material("PLA")
+    sim = ThermalSimulator(p, mat, SimConfig(voxel_mm=2.0), cancel_check=lambda: True)
+    try:
+        sim.run()
+        raise AssertionError("仿真应当被取消")
+    except SimulationCancelled:
+        pass
+
+
+def test_optimization_cancelled():
+    """cancel_check 恒真 → 优化应在首轮内抛 SimulationCancelled。"""
+    from backend.thermal.optimize import OptimizeConfig, optimize_speeds
+    from backend.thermal.voxel import SimulationCancelled
+
+    p = parse_gcode(generate_box_gcode(layers=8, size=20, feed=30))
+    mat = get_material("PLA")
+    try:
+        optimize_speeds(p, mat, SimConfig(voxel_mm=2.0), OptimizeConfig(rounds=2),
+                        cancel_check=lambda: True)
+        raise AssertionError("优化应当被取消")
+    except SimulationCancelled:
+        pass

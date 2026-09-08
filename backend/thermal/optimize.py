@@ -19,7 +19,7 @@ import numpy as np
 
 from ..gcode.model import ParsedGcode
 from .materials import Material
-from .voxel import SimConfig, ThermalSimulator
+from .voxel import SimConfig, SimulationCancelled, ThermalSimulator
 
 
 @dataclass
@@ -110,6 +110,7 @@ def optimize_speeds(
     sim_config: SimConfig,
     opt_config: OptimizeConfig,
     progress_cb=None,
+    cancel_check=None,
 ) -> OptimizeResult:
     n_layers = parsed.num_layers
     orig_feed = parsed.feedrate.copy()
@@ -124,6 +125,8 @@ def optimize_speeds(
                             bucket_s=sim_config.bucket_s * 1.6)
     try:
         for rnd in range(opt_config.rounds):
+            if cancel_check is not None and cancel_check():
+                raise SimulationCancelled("优化已被用户中断")
             use_cfg = sim_config if rnd == 0 else cfg_coarse
             _retime(parsed, feed)
             frac = (rnd + 1) / opt_config.rounds
@@ -131,6 +134,7 @@ def optimize_speeds(
                 parsed, material, use_cfg,
                 progress_cb=(lambda p, f=frac: progress_cb and progress_cb(
                     (f - 1.0 / opt_config.rounds) + p / opt_config.rounds)),
+                cancel_check=cancel_check,
             )
             res = sim.run()
             overview = _tqi_overview(res, parsed)
@@ -180,7 +184,7 @@ def optimize_speeds(
 
         # 防回退：综合分（均值 − 0.25×均匀性罚）若反而变差，回滚为原速
         _retime(parsed, feed)
-        sim = ThermalSimulator(parsed, material, sim_config)
+        sim = ThermalSimulator(parsed, material, sim_config, cancel_check=cancel_check)
         res = sim.run()
         result.final = _tqi_overview(res, parsed)
         result.final["est_time_s"] = float(parsed.t_mid[-1] + parsed.duration[-1])
@@ -191,7 +195,7 @@ def optimize_speeds(
             # 优化反而变差 → 回滚原速（保底：至少不变差）
             feed = orig_feed.copy()
             _retime(parsed, feed)
-            sim = ThermalSimulator(parsed, material, sim_config)
+            sim = ThermalSimulator(parsed, material, sim_config, cancel_check=cancel_check)
             res = sim.run()
             result.final = _tqi_overview(res, parsed)
             result.final["est_time_s"] = float(parsed.t_mid[-1] + parsed.duration[-1])
