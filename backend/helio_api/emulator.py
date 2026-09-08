@@ -209,6 +209,19 @@ def _g(msg: dict) -> JSONResponse:
     return JSONResponse(msg)
 
 
+def _log_request(kind: str, variables: dict) -> None:
+    """把 BS 发来的完整请求变量落盘——用于诊断 BS 到底传了哪些温度/材料字段。"""
+    try:
+        import os
+        log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        entry = {"ts": _now(), "kind": kind, "variables": variables}
+        with open(os.path.join(log_dir, "helio_requests.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 @router.post("/graphql/helio")
 async def graphql(request: Request):
     try:
@@ -266,6 +279,7 @@ async def graphql(request: Request):
 
     if "createSimulation" in query:
         inp = variables.get("input", {})
+        _log_request("createSimulation", variables)
         settings = inp.get("simulationSettings", {}) or {}
         gid = inp.get("gcodeId", "")
         g = GCODES.get(gid)
@@ -307,6 +321,7 @@ async def graphql(request: Request):
 
     if "createOptimization" in query:
         inp = variables.get("input", {})
+        _log_request("createOptimization", variables)
         gid = inp.get("gcodeId", "")
         g = GCODES.get(gid)
         if not g or g["parsed"] is None:
