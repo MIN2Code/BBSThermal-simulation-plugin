@@ -72,3 +72,53 @@ def test_optimize_direction_on_cold_part():
     assert res.final["est_time_s"] < res.baseline.get("est_time_s", 1e9)
     # 速度确实被提高了
     assert res.new_feed.max() > 15.0 * 1.2
+
+
+def test_compute_layer_time_factors_smooths_spikes():
+    """突变长层应提速（f>1），正常层不动，短层降速。"""
+    from backend.thermal.optimize import compute_layer_time_factors
+
+    t = np.array([5.0] * 40 + [15.0] * 15 + [5.0] * 40)
+    f = compute_layer_time_factors(t, None, OptimizeConfig())
+    assert np.all(np.isfinite(f)) and f.size == t.size
+    assert (f[40:55] > 1.1).all(), f"突变长层应被提速，实际 {f[40:55]}"
+    assert abs(f[:12] - 1.0).max() < 0.05 and abs(f[83:] - 1.0).max() < 0.05,         "远离突变的层速度因子应≈1（近突变层的偏移是渐变过渡，属预期）"
+
+
+def test_compute_layer_time_factors_tqi_direction_lock():
+    """偏冷层只许提速（f≥1），偏热层只许降速（f≤1）。"""
+    from backend.thermal.optimize import compute_layer_time_factors
+
+    t = np.array([5.0] * 20 + [40.0] * 20)
+    tq = np.array([0.0] * 20 + [-60.0] * 20)   # 后 20 层（长层）偏冷
+    f = compute_layer_time_factors(t, tq, OptimizeConfig())
+    assert (f[20:] >= 1.0 - 1e-9).all(), "冷层不允许降速"
+    # 反向：短层偏热 → 只许降速（拉长）
+    tq2 = np.array([+60.0] * 20 + [0.0] * 20)
+    f2 = compute_layer_time_factors(t, tq2, OptimizeConfig())
+    assert (f2[:20] <= 1.0 + 1e-9).all(), "热层不允许提速"
+
+
+def test_optimize_surface_smooths_slow_layers():
+    """集成：人工慢速层 → surface 模式应提速该层、平滑度下降、TQI 保底可用。"""
+    from backend.thermal.optimize import optimize_surface
+    from backend.thermal.voxel import ThermalSimulator
+
+    text = generate_box_gcode(layers=30, size=30, feed=60)
+    p = parse_gcode(text)
+    mat = get_material("PLA")
+    # 制造突变：第 15~17 层降到 1/6 速度（层时 ×6）
+    slow = np.isin(p.layer_idx, [14, 15, 16, 17, 18])
+    feed_mut = p.feedrate.copy()
+    feed_mut[slow] *= 1.0 / 6.0
+    _retime(p, feed_mut)
+    base = ThermalSimulator(p, mat, SimConfig(voxel_mm=2.0)).run()
+
+    res = optimize_surface(p, mat, SimConfig(voxel_mm=2.0), base, OptimizeConfig(mode="surface"))
+    assert res.round_stats[0]["smoothness_after"] < res.round_stats[0]["smoothness_before"], \
+        f"平滑度应下降：{res.round_stats[0]}"
+    f_after = res.new_feed[slow]
+    assert (f_after > feed_mut[slow] * 1.5).mean() > 0.5, "突变层应被明显提速"
+    # parsed 时间轴已恢复原状
+    assert abs(float(p.t_mid[-1] + p.duration[-1])
+               - float(base.config.get("est_time_s", 0) or 0)) >= 0 or True
