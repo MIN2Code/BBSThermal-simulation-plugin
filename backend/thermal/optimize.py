@@ -35,6 +35,11 @@ class OptimizeConfig:
     layers_to: int | None = None
     max_flow_mm3s: float | None = None  # 体积流量上限（按段珠截面折算限速）
     priority: str = "speed_strength"    # speed_strength | surface（表面优先：外墙不提速）
+    mode: str = "quality"           # quality=TQI 窗口迭代 | surface=层时平滑（表面一致）
+    smooth_target: float = 0.5      # 层时向邻域中位收缩系数 ρ（0=不动，1=完全压平）
+    lt_window: int = 25             # 层时邻域窗口（层，奇数化）
+    smooth_min_factor: float = 0.6  # 单层速度因子范围
+    smooth_max_factor: float = 1.8
 
 
 @dataclass
@@ -43,6 +48,7 @@ class OptimizeResult:
     round_stats: list[dict] = field(default_factory=list)
     final: dict = field(default_factory=dict)   # 末轮 TQI 概览
     baseline: dict = field(default_factory=dict)  # 首轮（=原速度）概览
+    layer_times_after: list[float] | None = None  # surface 模式：优化后逐层层时（回滚=None）
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +218,153 @@ def optimize_speeds(
 
 # ---------------------------------------------------------------------------
 _F_RE = re.compile(r"F([0-9.]+)")
+
+
+def _lt_smoothness(layer_times: np.ndarray) -> float:
+    """层时平滑度：对数层时的二阶差分 L1（越小越平滑）。"""
+    t = np.asarray(layer_times, dtype=np.float64)
+    t = t[np.isfinite(t) & (t > 0.05)]
+    if t.size < 3:
+        return 0.0
+    return float(np.mean(np.abs(np.diff(np.log(t), 2))))
+
+
+def _rolling_median(a: np.ndarray, w: int) -> np.ndarray:
+    pad = w // 2
+    ap = np.pad(a, pad, mode="edge")
+    from numpy.lib.stride_tricks import sliding_window_view
+    return np.median(sliding_window_view(ap, w), axis=1)
+
+
+def _rolling_mean(a: np.ndarray, w: int) -> np.ndarray:
+    pad = w // 2
+    ap = np.pad(a, pad, mode="edge")
+    return np.convolve(ap, np.ones(w) / w, mode="valid")[: a.size]
+
+
+def compute_layer_time_factors(
+    layer_times: np.ndarray,
+    layer_tqi: np.ndarray | None,
+    cfg: OptimizeConfig,
+) -> np.ndarray:
+    """表面一致模式核心：层时平滑速度因子（纯函数）。
+
+    目标层时 = 原层时与「低通趋势」按 ρ 混合，f = t / target：
+    - 两级滤波（中值去窄尖峰 → 均值提取大趋势）保证宽窄突变都能检测
+      （纯滑动中位在脉冲宽度≥半窗口时会被自身污染而失效）；
+    - 尖峰被压回邻域、台阶跳变被摊成渐变，缓慢爬坡（≈趋势）保持不动
+      ——对应用户需求：层时允许线性渐变，消除突变；
+    - TQI 方向约束：偏冷层只许提速（f≥1），偏热层只许降速（f≤1）。
+    """
+    t = np.asarray(layer_times, dtype=np.float64)
+    n = t.size
+    f = np.ones(n)
+    valid = np.isfinite(t) & (t > 0.05)
+    if valid.sum() < 9:
+        return f
+    tv = t.copy()
+    tv[~valid] = np.median(t[valid])
+    wm = max(3, int(cfg.lt_window * 0.5) | 1)
+    we = max(5, int(cfg.lt_window * 1.6) | 1)
+    trend = _rolling_mean(_rolling_median(tv, wm), we)
+    target = np.maximum(tv + cfg.smooth_target * (trend - tv), 0.05)
+    f = np.where(valid, tv / target, 1.0)
+    f = np.clip(f, cfg.smooth_min_factor, cfg.smooth_max_factor)
+    if layer_tqi is not None:
+        tq = np.asarray(layer_tqi, dtype=np.float64)
+        cold = np.isfinite(tq) & (tq < cfg.cold_threshold)
+        hot = np.isfinite(tq) & (tq > cfg.hot_threshold)
+        f = np.where(cold, np.maximum(f, 1.0), f)
+        f = np.where(hot, np.minimum(f, 1.0), f)
+    return f
+
+
+def optimize_surface(
+    parsed: ParsedGcode,
+    material: Material,
+    sim_config: SimConfig,
+    baseline_result,
+    opt_config: OptimizeConfig,
+    progress_cb=None,
+    cancel_check=None,
+) -> OptimizeResult:
+    """表面一致模式：平滑逐层层时（冷却纹理的根源），TQI 仅作安全约束。
+
+    层时突变 = 表面光泽突变。策略：每层速度因子 = 原层时 / 平滑目标层时
+    （单次解析计算，不迭代），随后跑一次验证仿真确认热质量不崩
+    （mean TQI 掉超 8 分则回滚原速）。需要基线仿真结果提供逐层 TQI。
+    """
+    orig_feed = parsed.feedrate.copy()
+    orig_times = (parsed.t_mid.copy(), parsed.duration.copy(),
+                  parsed.layer_t0.copy(), parsed.layer_t1.copy())
+    result = OptimizeResult(new_feed=orig_feed.copy())
+
+    lt = parsed.layer_t1.astype(np.float64) - parsed.layer_t0.astype(np.float64)
+    tq = None
+    base_ov = None
+    if baseline_result is not None and getattr(baseline_result, "layer_stats", None):
+        tq = np.full(parsed.num_layers, np.nan)
+        for st in baseline_result.layer_stats:
+            if st.get("mean_tqi") is not None and 0 <= st["layer"] < parsed.num_layers:
+                tq[st["layer"]] = st["mean_tqi"]
+        base_ov = _tqi_overview(baseline_result, parsed)
+        base_ov["est_time_s"] = float(parsed.t_mid[-1] + parsed.duration[-1])
+        result.baseline = base_ov
+
+    factors = compute_layer_time_factors(lt, tq, opt_config)
+    lf, ltf = opt_config.layers_from, opt_config.layers_to
+    if lf is not None:
+        factors[:max(int(lf), 0)] = 1.0
+    if ltf is not None:
+        factors[int(ltf) + 1:] = 1.0
+
+    feed = np.clip(orig_feed * factors[parsed.layer_idx],
+                   opt_config.min_speed, opt_config.max_speed)
+    if opt_config.max_flow_mm3s:
+        g = parsed.geometry
+        seg_len = np.maximum(np.hypot(g[:, 3] - g[:, 0], g[:, 4] - g[:, 1]), 1e-6)
+        vol_per_mm = np.maximum(parsed.extrusion_mm3 / seg_len, 1e-6)
+        feed = np.minimum(feed, np.maximum(opt_config.max_flow_mm3s / vol_per_mm,
+                                           opt_config.min_speed))
+    _retime(parsed, feed)
+    lt_after = parsed.layer_t1.astype(np.float64) - parsed.layer_t0.astype(np.float64)
+    result.round_stats.append({
+        "round": 1,
+        "smoothness_before": _lt_smoothness(lt),
+        "smoothness_after": _lt_smoothness(lt_after),
+    })
+    if progress_cb:
+        progress_cb(0.6)
+
+    sim = ThermalSimulator(parsed, material, sim_config, cancel_check=cancel_check)
+    res = sim.run()
+    overview = _tqi_overview(res, parsed)
+    overview["est_time_s"] = float(parsed.t_mid[-1] + parsed.duration[-1])
+
+    # 热质量保底：mean TQI 掉超 8 分 → 回滚原速（表面一致不能以热崩为代价）
+    if base_ov is not None and base_ov.get("mean_tqi") is not None:
+        if (overview.get("mean_tqi") is not None
+                and overview["mean_tqi"] < base_ov["mean_tqi"] - 8.0):
+            feed = orig_feed.copy()
+            _retime(parsed, feed)
+            overview = dict(base_ov)
+            overview["rolled_back"] = True
+        else:
+            result.layer_times_after = [round(float(x), 2) for x in lt_after]
+    else:
+        result.layer_times_after = [round(float(x), 2) for x in lt_after]
+
+    result.final = overview
+    result.final["est_time_s"] = float(parsed.t_mid[-1] + parsed.duration[-1])
+    result.new_feed = feed
+    # 恢复 parsed 到原始状态（与 quality 模式 finally 语义一致；优化速度在 new_feed）
+    parsed.feedrate[:] = orig_feed
+    (parsed.t_mid[:], parsed.duration[:], parsed.layer_t0[:], parsed.layer_t1[:]) = orig_times
+    _retime(parsed, orig_feed)
+    return result
+
+
+
 
 
 def rewrite_gcode(text: str, parsed: ParsedGcode, new_feed: np.ndarray,

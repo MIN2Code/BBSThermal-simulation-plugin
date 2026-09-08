@@ -95,6 +95,10 @@ footer {
     <option value="2">2.0</option><option value="3">3.0</option>
   </select></span>
   <button class="btn primary" id="simulate" disabled>开始热仿真</button>
+  <select id="optmode" title="优化模式：热质量优先=TQI 窗口迭代；表面一致=平滑逐层层时（消除冷却纹理）">
+    <option value="quality" selected>热质量优先</option>
+    <option value="surface">表面一致（层时平滑）</option>
+  </select>
   <button class="btn" id="optimize" disabled title="基于热仿真结果自动调整逐层速度">优化打印速度</button>
   <button class="btn" id="stop" hidden title="中断正在进行的仿真或优化">停止</button>
   <a class="btn ghost" href="/calibration" target="_blank">校准</a>

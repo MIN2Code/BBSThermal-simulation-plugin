@@ -198,15 +198,37 @@ def _opt_worker(job: Job, params: dict) -> None:
         material = get_material(params.get("material") or job.meta.get("config", {}).get("material", "PLA"))
         cfg = job.sim_config or SimConfig()
         opt_cfg = OptimizeConfig(
+            mode=params.get("mode", "quality"),
             rounds=int(params.get("rounds", 3)),
             cold_gain=float(params.get("cold_gain", 1.25)),
             hot_gain=float(params.get("hot_gain", 0.80)),
         )
-        job.opt_result = optimize_speeds(
-            job.parsed, material, cfg, opt_cfg,
-            progress_cb=lambda p: setattr(job, "progress", min(float(p) * 0.97, 0.97)),
-            cancel_check=lambda: job.cancel_requested,
-        )
+        mode = opt_cfg.mode
+        if mode == "surface":
+            from .thermal.optimize import optimize_surface
+            job.opt_result = optimize_surface(
+                job.parsed, material, cfg, job.result, opt_cfg,
+                progress_cb=lambda p: setattr(job, "progress", min(float(p) * 0.97, 0.97)),
+                cancel_check=lambda: job.cancel_requested,
+            )
+        else:
+            job.opt_result = optimize_speeds(
+                job.parsed, material, cfg, opt_cfg,
+                progress_cb=lambda p: setattr(job, "progress", min(float(p) * 0.97, 0.97)),
+                cancel_check=lambda: job.cancel_requested,
+            )
+        lt_before = (job.parsed.layer_t1.astype(float) - job.parsed.layer_t0.astype(float))
+
+        def _ds(arr, cap=600):
+            a = np.asarray(arr, dtype=float)
+            if a.size == 0:
+                return []
+            if a.size > cap:
+                a = a[np.linspace(0, a.size - 1, cap).astype(int)]
+            return [round(float(x), 2) for x in a]
+
+        lta = getattr(job.opt_result, "layer_times_after", None)
+        layer_times = None if lta is None else {"before": _ds(lt_before), "after": _ds(lta)}
         out_text, changed = rewrite_gcode(job.raw_text, job.parsed, job.opt_result.new_feed)
         job.opt_gcode = out_text.encode("utf-8")
         base = job.opt_result.baseline
@@ -216,6 +238,8 @@ def _opt_worker(job: Job, params: dict) -> None:
             "final": fin,
             "rounds": job.opt_result.round_stats,
             "changed_lines": changed,
+            "mode": mode,
+            "layer_times": layer_times,
             "params": {"rounds": opt_cfg.rounds, "cold_gain": opt_cfg.cold_gain,
                        "hot_gain": opt_cfg.hot_gain},
             "material": material.name,

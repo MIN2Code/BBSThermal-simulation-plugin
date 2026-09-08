@@ -117,6 +117,7 @@ $('optimize').addEventListener('click', async () => {
   if (!state.jobId) return;
   const params = {
     material: $('material').value,
+    mode: $('optmode').value,
     rounds: 3,
   };
   const ch = $('chamber').value;
@@ -488,26 +489,61 @@ function currentLayerMean() {
 function renderOptimizeReport(m) {
   const b = m.baseline, f = m.final;
   const dt = (b.est_time_s && f.est_time_s) ? (f.est_time_s - b.est_time_s) / b.est_time_s * 100 : null;
+  const isSurface = m.mode === 'surface';
   const rows = m.rounds.map((r) => `
     <div class="worstlayer" style="cursor:default">
       <span>第 ${r.round} 轮</span>
-      <b>TQI ${r.mean_tqi.toFixed(1)} · 冷 ${(r.cold_pct ?? 0).toFixed(0)}% · ${fmtTime(r.est_time_s)}</b>
+      <b>${isSurface
+        ? `层时平滑度 ${r.smoothness_before.toFixed(3)} → ${r.smoothness_after.toFixed(3)}`
+        : `TQI ${r.mean_tqi.toFixed(1)} · 冷 ${(r.cold_pct ?? 0).toFixed(0)}% · ${fmtTime(r.est_time_s)}`}</b>
     </div>`).join('');
   const el = $('report');
   el.insertAdjacentHTML('afterbegin', `
-    <h3>速度优化结果（${m.material}）</h3>
+    <h3>速度优化结果（${m.material}${isSurface ? ' · 表面一致' : ''}）</h3>
     <div class="kv">
-      <span>平均 TQI</span><b>${b.mean_tqi.toFixed(1)} → <span style="color:${tqiCss(f.mean_tqi)}">${f.mean_tqi.toFixed(1)}</span></b>
+      ${isSurface
+        ? `<span>层时平滑度</span><b>${(m.rounds[0]?.smoothness_before ?? 0).toFixed(3)} → <span style="color:#7fd47f">${(m.rounds[0]?.smoothness_after ?? 0).toFixed(3)}</span>（越小越平滑）</b>`
+        : `<span>平均 TQI</span><b>${b.mean_tqi.toFixed(1)} → <span style="color:${tqiCss(f.mean_tqi)}">${f.mean_tqi.toFixed(1)}</span></b>
       <span>偏冷段占比</span><b>${(b.cold_pct ?? 0).toFixed(1)}% → ${(f.cold_pct ?? 0).toFixed(1)}%</b>
-      <span>偏热段占比</span><b>${(b.hot_pct ?? 0).toFixed(1)}% → ${(f.hot_pct ?? 0).toFixed(1)}%</b>
+      <span>偏热段占比</span><b>${(b.hot_pct ?? 0).toFixed(1)}% → ${(f.hot_pct ?? 0).toFixed(1)}%</b>`}
       <span>预计时长</span><b>${fmtTime(b.est_time_s)} → ${fmtTime(f.est_time_s)}${dt != null ? `（${dt > 0 ? '+' : ''}${dt.toFixed(1)}%）` : ''}</b>
       <span>改写行数</span><b>${m.changed_lines.toLocaleString()}</b>
+      ${f.rolled_back ? '<span style="color:#e8a13f">已回滚</span><b style="color:#e8a13f">热质量保底触发，维持原速</b>' : ''}
     </div>
+    ${m.layer_times ? `<h3>逐层层时（优化前 → 优化后）</h3><canvas id="ltchart" width="640" height="170" style="width:100%"></canvas>` : ''}
     <h3>迭代过程</h3>${rows}
     <div style="margin:10px 0">
       <a class="btn primary" style="text-decoration:none;display:block;text-align:center"
          href="/api/optimize/${state.jobId}/download" download>下载优化后 G-code</a>
     </div>`);
+  if (m.layer_times) drawLayerTimes(m.layer_times);
+}
+
+function drawLayerTimes(lt) {
+  const cv = $('ltchart');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height, pad = 34;
+  const series = [[lt.before, '#5b6773'], [lt.after, '#7fd47f']];
+  const all = lt.before.concat(lt.after);
+  const hi = Math.max(...all), lo = Math.min(...all);
+  const X = (i, n) => pad + (W - pad - 8) * (n > 1 ? i / (n - 1) : 0);
+  const Y = (v) => H - 22 - (H - 34) * ((Math.log(Math.max(v, 0.05)) - Math.log(Math.max(lo, 0.05))) / Math.max(Math.log(Math.max(hi, 0.05)) - Math.log(Math.max(lo, 0.05)), 1e-6));
+  for (const [arr, color] of series) {
+    ctx.beginPath();
+    arr.forEach((v, i) => i ? ctx.lineTo(X(i, arr.length), Y(v)) : ctx.moveTo(X(i, arr.length), Y(v)));
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#8b96a5';
+  ctx.font = '18px sans-serif';
+  ctx.fillText(`最长 ${hi.toFixed(1)}s`, 4, 16);
+  ctx.fillText(`最短 ${lo.toFixed(1)}s`, 4, H - 6);
+  ctx.fillStyle = '#5b6773';
+  ctx.fillText('优化前', W - 150, 16);
+  ctx.fillStyle = '#7fd47f';
+  ctx.fillText('优化后', W - 80, 16);
 }
 
 // ---------------------------------------------------------------- BS 端点切换
