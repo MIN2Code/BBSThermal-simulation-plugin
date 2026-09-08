@@ -533,9 +533,15 @@ $('bsmode').addEventListener('change', async (ev) => {
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.detail || r.statusText);
-    if (j.warning) toast(j.warning, 8000);
-    else toast(mode === 'local' ? '已切换到本地引擎——请重启 Bambu Studio'
-                                : '已切换回官方 Helio 云——请重启 Bambu Studio', 8000);
+    if (j.applied === false) {
+      // 后端拒绝（如 BS 正在运行）——配置未修改，恢复下拉为真实状态
+      toast('未切换：' + (j.warning || '原因未知'), 15000);
+      await loadBsMode();
+      return;
+    }
+    if (j.warning) toast(j.warning, 15000);
+    else toast(mode === 'local' ? '已切换到本地引擎——请完全关闭并重启 Bambu Studio'
+                                : '已切换回官方 Helio 云——请完全关闭并重启 Bambu Studio', 15000);
   } catch (e) {
     toast('切换失败：' + e.message);
     await loadBsMode();
