@@ -5,6 +5,7 @@ import secrets
 import threading
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from ..calibration.chip import generate_chip
@@ -111,3 +112,112 @@ def fit_status(fit_id: str):
 @router.get("/profiles")
 def profiles():
     return list_profiles()
+
+
+# ---------------------------------------------------------------------------
+# 标准量化测试件（温度塔 / VFA 速度塔）
+# ---------------------------------------------------------------------------
+@router.get("/tower/download")
+def download_tower(material: str = "PLA"):
+    from ..calibration.standard import generate_temp_tower
+
+    text, manifest = generate_temp_tower(material)
+    return Response(
+        content=text.encode("utf-8"), media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="temp_tower_{material}.gcode"'},
+    )
+
+
+@router.get("/vfa/download")
+def download_vfa(material: str = "PLA"):
+    from ..calibration.standard import generate_vfa
+
+    text, manifest = generate_vfa(material)
+    return Response(
+        content=text.encode("utf-8"), media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="vfa_{material}.gcode"'},
+    )
+
+
+class TowerFitRequest(BaseModel):
+    material: str = "PLA"
+    outcomes: dict[str, str]  # {"1": "weak", "2": "ok", "3": "hot", ...}（块号 1 基）
+
+
+@router.post("/tower/fit")
+def start_tower_fit(req: TowerFitRequest):
+    from ..calibration.standard_fit import fit_temp_tower
+
+    outcomes = {}
+    for k, v in req.outcomes.items():
+        try:
+            bi = int(k)
+        except ValueError:
+            raise HTTPException(400, f"块号必须是数字: {k}") from None
+        if v not in ("weak", "ok", "hot"):
+            raise HTTPException(400, f"块评价只能是 weak/ok/hot: {k}={v}")
+        outcomes[bi] = v
+    if len(outcomes) < 3:
+        raise HTTPException(400, "至少报告 3 块结果")
+    material = get_material(req.material)
+
+    fit_id = secrets.token_hex(6)
+    with _LOCK:
+        FITS[fit_id] = {"status": "fitting", "progress": 0.0, "report": None,
+                        "material": req.material}
+
+    def worker():
+        fit = FITS[fit_id]
+        try:
+            report = fit_temp_tower(outcomes, material,
+                                    progress_cb=lambda p: setattr(fit, "progress", min(p, 0.99)))
+            if report.get("ok"):
+                save_profile({
+                    "material": req.material,
+                    "iface_reheat": report["kappa"],
+                    "nozzle_heat": report["eta"],
+                    "cold_below": report["cold_below"],
+                    "ideal_lo": report["ideal_lo"],
+                    "ideal_hi": report["ideal_hi"],
+                    "hot_above": report["hot_above"],
+                    "bond_threshold": report["t_bond"],
+                    "agreement": report["agreement"],
+                    "section_iface": report["block_iface"],
+                    "source": "temp-tower",
+                })
+                report["profile_saved"] = True
+            fit["report"] = report
+            fit["progress"] = 1.0
+            fit["status"] = "done"
+        except Exception as exc:  # noqa: BLE001
+            fit["status"] = "error"
+            fit["error"] = str(exc)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"fit_id": fit_id}
+
+
+class VfaFitRequest(BaseModel):
+    material: str = "PLA"
+    onset_band: int  # 起始瑕疵档（1 基）
+
+
+@router.post("/vfa/fit")
+def vfa_fit(req: VfaFitRequest):
+    from ..calibration.standard import generate_vfa
+    from ..calibration.standard_fit import fit_vfa
+
+    _, manifest = generate_vfa(req.material)
+    if not 1 <= req.onset_band <= len(manifest["bands"]):
+        raise HTTPException(400, f"档位超出范围 1~{len(manifest['bands'])}")
+    report = fit_vfa(req.onset_band, get_material(req.material), manifest)
+    profile = {
+        "material": req.material,
+        "flow_ref": report["flow_ref"],
+        "flow_span": report["flow_span"],
+        "max_flow_mm3s": report["onset_flow"],
+        "source": "vfa",
+    }
+    save_profile(profile)
+    report["profile_saved"] = True
+    return report

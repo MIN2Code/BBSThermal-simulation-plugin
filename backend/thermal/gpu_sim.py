@@ -106,9 +106,12 @@ def simulate_gpu(parsed, material, cfg: SimConfig, progress_cb=None) -> SimResul
     pix, piy, piz = cell_of(px, py, pz)
     pt_cell = torch.from_numpy(((pix * ny + piy) * nz + piz)).to(dev)
     pt_vol = torch.from_numpy((seg_vol / n_pts)[seg_of_pt].astype(np.float32)).to(dev)
-    # 每点有效沉积温度（流量降额）
+    # 每点有效沉积温度（流量降额 + 逐段喷嘴温度，支持变温打印）
     flow = seg_vol / np.maximum(seg_dur, 1e-3)
-    t_dep_seg = nozzle_t - cfg.flow_derate * np.clip(
+    seg_nozzle = (parsed.nozzle_seg[order].astype(np.float64) if parsed.nozzle_seg is not None
+                  else np.full(len(seg_t), nozzle_t))
+    seg_nozzle = np.where(seg_nozzle > 100, seg_nozzle, nozzle_t)
+    t_dep_seg = seg_nozzle - cfg.flow_derate * np.clip(
         (flow - cfg.flow_ref) / max(cfg.flow_span, 1e-6), 0.0, 1.0)
     pt_tdep = torch.from_numpy(t_dep_seg[seg_of_pt].astype(np.float32)).to(dev)
     pt_iz_cpu = piz  # CPU 侧推进范围计算用
