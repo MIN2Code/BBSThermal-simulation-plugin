@@ -31,28 +31,41 @@ def detect_nozzle_blocks(parsed) -> list[dict]:
     return blocks
 
 
-def detect_speed_bands(parsed) -> list[dict]:
-    """按挤出速度的连续段划分带（1 基带号）。返回按速度升序排序的带列表。"""
+def detect_speed_bands(parsed, *, min_band_layers: int = 3) -> list[dict]:
+    """按层的挤出主导速度聚类成带（相邻层速度差 <3% 合并）。
+
+    适配 BS 自带 VFA/最大流速测试件：速度按段阶梯变化，墙/填充的微差
+    不应碎裂分带。跨度小于 min_band_layers 的过渡带被丢弃。
+    返回按速度升序的带列表（含层范围与平均流量）。
+    """
     ext = parsed.extrusion_mm3 > 0
-    feed = parsed.feedrate[ext].astype(float)
     lay = parsed.layer_idx[ext]
+    feed = parsed.feedrate[ext].astype(float)
     flow = parsed.extrusion_mm3[ext] / np.maximum(parsed.duration[ext], 1e-3)
+
+    # 每层主导速度 = 层内挤出段速度中位数
+    layers = np.unique(lay)
+    layer_speed = {}
+    for L in layers:
+        layer_speed[int(L)] = float(np.median(feed[lay == L]))
+
+    # 相邻层速度差 <3% 合并为带
     bands: list[dict] = []
     cur: dict | None = None
-    for i in range(len(feed)):
-        v = float(round(feed[i], 0))
-        if cur is None or abs(v - cur["speed"]) > 1.0:
-            if cur is not None:
-                bands.append(cur)
-            cur = {"speed": v, "count": 0, "flow_sum": 0.0,
-                   "layer_from": int(lay[i]), "layer_to": int(lay[i])}
-        cur["count"] += 1
-        cur["flow_sum"] += float(flow[i])
-        cur["layer_to"] = int(lay[i])
-    if cur is not None:
-        bands.append(cur)
+    for L in sorted(layer_speed):
+        v = layer_speed[L]
+        if cur is None or abs(v - cur["speed"]) / max(cur["speed"], 1e-6) > 0.03:
+            cur = {"speed": v, "layer_from": L, "layer_to": L, "flows": [flow[lay == L]]}
+            bands.append(cur)
+        else:
+            cur["layer_to"] = L
+            cur["flows"].append(flow[lay == L])
     for b in bands:
-        b["flow_mm3s"] = round(b["flow_sum"] / max(b["count"], 1), 2)
+        b["flow_mm3s"] = round(float(np.mean(np.concatenate(b["flows"]))), 2)
+        b["layers"] = f"{b['layer_from']}-{b['layer_to']}"
+        b["span"] = b["layer_to"] - b["layer_from"] + 1
+        del b["flows"]
+    bands = [b for b in bands if b["span"] >= min_band_layers]
     bands.sort(key=lambda b: b["speed"])
     for n, b in enumerate(bands, 1):
         b["band"] = n
