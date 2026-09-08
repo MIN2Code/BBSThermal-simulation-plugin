@@ -107,6 +107,7 @@ $('simulate').addEventListener('click', async () => {
   }
   $('progress').classList.add('on');
   $('simulate').disabled = true;
+  $('stop').hidden = false;
   state.running = 'sim';
   state.polling = setInterval(pollJob, 700);
 });
@@ -134,8 +135,19 @@ $('optimize').addEventListener('click', async () => {
   $('progress').classList.add('on');
   $('optimize').disabled = true;
   $('simulate').disabled = true;
+  $('stop').hidden = false;
   state.running = 'opt';
   state.polling = setInterval(pollJob, 700);
+});
+
+// ---------------------------------------------------------------- 中断
+$('stop').addEventListener('click', async () => {
+  if (!state.jobId) return;
+  try {
+    await fetch(`/api/job/${state.jobId}/cancel`, { method: 'POST' });
+    $('ptext').textContent = '正在中断…';
+    $('stop').disabled = true;
+  } catch { /* 下次轮询会看到结果 */ }
 });
 
 async function pollJob() {
@@ -151,6 +163,8 @@ async function pollJob() {
       clearInterval(state.polling);
       $('progress').classList.remove('on');
       $('ptext').textContent = '';
+      $('stop').hidden = true;
+      $('stop').disabled = false;
       if (state.running === 'opt') {
         await loadOptimizeResult();
         $('optimize').disabled = false;
@@ -160,9 +174,20 @@ async function pollJob() {
         setMode('tqi');
       }
       $('simulate').disabled = false;
+    } else if (j.status === 'cancelled') {
+      clearInterval(state.polling);
+      $('progress').classList.remove('on');
+      $('ptext').textContent = '';
+      $('stop').hidden = true;
+      $('stop').disabled = false;
+      $('simulate').disabled = false;
+      $('optimize').disabled = state.running !== 'opt';
+      toast('已中断计算。', 6000);
     } else if (j.status === 'error') {
       clearInterval(state.polling);
       $('progress').classList.remove('on');
+      $('stop').hidden = true;
+      $('stop').disabled = false;
       $('simulate').disabled = false;
       $('optimize').disabled = state.running === 'opt';
       toast(`计算出错：${(j.error || '').split('\n')[0]}`, 12000);

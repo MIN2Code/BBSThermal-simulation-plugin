@@ -18,7 +18,7 @@ from .gcode.parser import parse_gcode
 from .thermal.materials import get_material, list_materials
 from .thermal.optimize import rewrite_gcode
 from .thermal.tqi import tqi_from_interface_temp
-from .thermal.voxel import SimConfig, SimResult, ThermalSimulator
+from .thermal.voxel import SimConfig, SimResult, SimulationCancelled, ThermalSimulator
 
 # 每段 40 字节：6×f32 几何 + f32 tqi + f32 iface + i32 层号 + u8 特性 + u8 有效 + 2 pad
 SEG_STRIDE = 40
@@ -28,9 +28,10 @@ SEG_STRIDE = 40
 class Job:
     id: str
     name: str = ""
-    status: str = "parsed"          # parsed | simulating | optimizing | done | error
+    status: str = "parsed"          # parsed | simulating | optimizing | done | error | cancelled
     progress: float = 0.0
     error: str | None = None
+    cancel_requested: bool = False  # 前端停止按钮置位，worker 在检查点响应
     created: float = field(default_factory=time.time)
     parsed: ParsedGcode | None = None
     result: SimResult | None = None
@@ -124,6 +125,7 @@ def start_simulation(job_id: str, params: dict) -> None:
         job.result = None
         job.payload = None
         job.meta = None
+        job.cancel_requested = False
     t = threading.Thread(target=_worker, args=(job, params), daemon=True)
     t.start()
 
@@ -149,14 +151,27 @@ def _worker(job: Job, params: dict) -> None:
         sim = ThermalSimulator(
             job.parsed, material, cfg,
             progress_cb=lambda p: setattr(job, "progress", min(float(p), 0.99)),
+            cancel_check=lambda: job.cancel_requested,
         )
         job.result = sim.run()
         job.payload, job.meta = pack_result(job.parsed, job.result, material.name)
         job.progress = 1.0
         job.status = "done"
+    except SimulationCancelled:
+        job.status = "cancelled"
+        job.error = None
     except Exception as exc:  # noqa: BLE001
         job.error = f"{exc}\n{traceback.format_exc(limit=3)}"
         job.status = "error"
+
+
+def cancel_job(job_id: str) -> bool:
+    """请求中断进行中的仿真/优化。返回是否已受理。"""
+    job = get_job(job_id)
+    if job.status in ("simulating", "optimizing"):
+        job.cancel_requested = True
+        return True
+    return False
 
 
 def start_optimize(job_id: str, params: dict) -> None:
@@ -171,6 +186,7 @@ def start_optimize(job_id: str, params: dict) -> None:
         job.status = "optimizing"
         job.progress = 0.0
         job.error = None
+        job.cancel_requested = False
     t = threading.Thread(target=_opt_worker, args=(job, params), daemon=True)
     t.start()
 
@@ -189,6 +205,7 @@ def _opt_worker(job: Job, params: dict) -> None:
         job.opt_result = optimize_speeds(
             job.parsed, material, cfg, opt_cfg,
             progress_cb=lambda p: setattr(job, "progress", min(float(p) * 0.97, 0.97)),
+            cancel_check=lambda: job.cancel_requested,
         )
         out_text, changed = rewrite_gcode(job.raw_text, job.parsed, job.opt_result.new_feed)
         job.opt_gcode = out_text.encode("utf-8")
@@ -206,6 +223,9 @@ def _opt_worker(job: Job, params: dict) -> None:
         }
         job.progress = 1.0
         job.status = "done"
+    except SimulationCancelled:
+        job.status = "cancelled"
+        job.error = None
     except Exception as exc:  # noqa: BLE001
         job.error = f"{exc}\n{traceback.format_exc(limit=3)}"
         job.status = "error"
