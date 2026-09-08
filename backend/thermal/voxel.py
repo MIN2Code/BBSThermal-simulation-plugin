@@ -42,6 +42,7 @@ class SimConfig:
     bucket_s: float = 0.3        # 时间桶长度（秒）
     chamber_temp: float | None = None  # None → 自动估计
     ambient_temp: float = 25.0
+    layer_time_gain: float = 1.5    # 层时保持项 °C/ln(倍层时)：层时越长界面越冷（弱结合）
     margin_cells: int = 3        # 网格外扩格数（保证沉积格都在动力内核内）
     max_cells: int = 8_000_000   # 网格单元上限（超出自动加大体素）
     device: str = "cpu"          # cpu（默认，numba 最快）| gpu（实验性，WDDM 小内核开销大）
@@ -134,6 +135,26 @@ class SimulationCancelled(Exception):
     """外部请求中断仿真/优化（前端停止按钮、任务清理）。"""
 
 
+def apply_layer_time_term(iface: np.ndarray, parsed, gain: float) -> np.ndarray:
+    """显式层时保持项：T_eff = iface − gain·ln(层时/中位层时)。
+
+    体素场是准稳态的（提速时置热功率与冷却时间同比例缩放，场温近乎不变，
+    实测 2.5 倍速差仅 ~0.8°C），但界面结合还依赖覆盖后熔融保持时长——
+    层时短 → 界面材料保持高温久 → 偏热（下垂），层时长 → 界面冷却充分 →
+    偏冷（弱结合）。官方截面标定量级 ≈2°C/倍层时，场自身仅提供 ~0.6，
+    此项补齐剩余通道。参考点取本任务中位层时：绝对均值不动（保持与
+    Helio 官方的对齐），只产生相对层时信号。
+    """
+    if not gain:
+        return iface
+    lt = np.maximum(parsed.layer_t1.astype(np.float64) - parsed.layer_t0.astype(np.float64), 0.05)
+    med = float(np.median(lt))
+    if med <= 0:
+        return iface
+    adj = -gain * np.log(lt / med)
+    return iface + adj[parsed.layer_idx]
+
+
 class ThermalSimulator:
     def __init__(
         self,
@@ -193,6 +214,7 @@ class ThermalSimulator:
         # 结果映射回原始段序
         iface = np.empty(iface_ordered.shape, dtype=np.float64)
         iface[self._order] = iface_ordered
+        iface = apply_layer_time_term(iface, self.p, self.cfg.layer_time_gain)
         tqi = tqi_from_interface_temp(iface, self.m)
         valid = self._valid_mask()
         labels = self._element_labels()

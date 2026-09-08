@@ -274,6 +274,8 @@ def simulate_gpu(parsed, material, cfg: SimConfig, progress_cb=None) -> SimResul
     iface_ordered = iface_gpu.cpu().numpy().astype(np.float64)
     iface = np.empty(n_seg, dtype=np.float64)
     iface[order] = iface_ordered
+    from .voxel import apply_layer_time_term
+    iface = apply_layer_time_term(iface, parsed, cfg.layer_time_gain)
     tqi = tqi_from_interface_temp(iface, material)
 
     from ..gcode.model import TQI_FEATURES
