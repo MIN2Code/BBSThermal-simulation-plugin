@@ -78,9 +78,10 @@ def test_compute_layer_time_factors_smooths_spikes():
     """突变长层应提速（f>1），正常层不动，短层降速。"""
     from backend.thermal.optimize import compute_layer_time_factors
 
-    t = np.array([5.0] * 40 + [15.0] * 15 + [5.0] * 40)
-    f = compute_layer_time_factors(t, None, OptimizeConfig())
-    assert np.all(np.isfinite(f)) and f.size == t.size
+    extrude = np.array([4.0] * 40 + [14.0] * 15 + [4.0] * 40)
+    travel = np.full(extrude.size, 1.0)
+    f = compute_layer_time_factors(travel, extrude, None, OptimizeConfig())
+    assert np.all(np.isfinite(f)) and f.size == extrude.size
     assert (f[40:55] > 1.1).all(), f"突变长层应被提速，实际 {f[40:55]}"
     assert abs(f[:12] - 1.0).max() < 0.05 and abs(f[83:] - 1.0).max() < 0.05,         "远离突变的层速度因子应≈1（近突变层的偏移是渐变过渡，属预期）"
 
@@ -89,13 +90,14 @@ def test_compute_layer_time_factors_tqi_direction_lock():
     """偏冷层只许提速（f≥1），偏热层只许降速（f≤1）。"""
     from backend.thermal.optimize import compute_layer_time_factors
 
-    t = np.array([5.0] * 20 + [40.0] * 20)
+    travel = np.full(40, 1.0)
+    extrude = np.array([4.0] * 20 + [39.0] * 20)
     tq = np.array([0.0] * 20 + [-60.0] * 20)   # 后 20 层（长层）偏冷
-    f = compute_layer_time_factors(t, tq, OptimizeConfig())
+    f = compute_layer_time_factors(travel, extrude, tq, OptimizeConfig())
     assert (f[20:] >= 1.0 - 1e-9).all(), "冷层不允许降速"
     # 反向：短层偏热 → 只许降速（拉长）
     tq2 = np.array([+60.0] * 20 + [0.0] * 20)
-    f2 = compute_layer_time_factors(t, tq2, OptimizeConfig())
+    f2 = compute_layer_time_factors(travel, extrude, tq2, OptimizeConfig())
     assert (f2[:20] <= 1.0 + 1e-9).all(), "热层不允许提速"
 
 

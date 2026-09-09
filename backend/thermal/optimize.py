@@ -243,22 +243,25 @@ def _rolling_mean(a: np.ndarray, w: int) -> np.ndarray:
 
 
 def compute_layer_time_factors(
-    layer_times: np.ndarray,
+    travel_t: np.ndarray,
+    extrude_t: np.ndarray,
     layer_tqi: np.ndarray | None,
     cfg: OptimizeConfig,
 ) -> np.ndarray:
-    """表面一致模式核心：层时平滑速度因子（纯函数）。
+    """表面一致模式核心：层时平滑速度因子（纯函数，精确空走/挤出分解）。
 
-    目标层时 = 原层时与「低通趋势」按 ρ 混合，f = t / target：
+    层时 = 空走（不随速度变）+ 挤出（∝1/f）。目标层时 target 由两级滤波
+    趋势按 ρ 收缩而来，f = 挤出 / (target − 空走)：
+    - 空走占比高的层（小特征层）可达层时受限，因子自动保守；
     - 两级滤波（中值去窄尖峰 → 均值提取大趋势）保证宽窄突变都能检测
       （纯滑动中位在脉冲宽度≥半窗口时会被自身污染而失效）；
-    - 尖峰被压回邻域、台阶跳变被摊成渐变，缓慢爬坡（≈趋势）保持不动
-      ——对应用户需求：层时允许线性渐变，消除突变；
     - TQI 方向约束：偏冷层只许提速（f≥1），偏热层只许降速（f≤1）。
     """
-    t = np.asarray(layer_times, dtype=np.float64)
-    n = t.size
+    travel_t = np.asarray(travel_t, dtype=np.float64)
+    extrude_t = np.asarray(extrude_t, dtype=np.float64)
+    n = travel_t.size
     f = np.ones(n)
+    t = travel_t + extrude_t
     valid = np.isfinite(t) & (t > 0.05)
     if valid.sum() < 9:
         return f
@@ -268,7 +271,9 @@ def compute_layer_time_factors(
     we = max(5, int(cfg.lt_window * 1.6) | 1)
     trend = _rolling_mean(_rolling_median(tv, wm), we)
     target = np.maximum(tv + cfg.smooth_target * (trend - tv), 0.05)
-    f = np.where(valid, tv / target, 1.0)
+    denom = target - travel_t
+    f = np.where(denom > 0.05, extrude_t / np.maximum(denom, 0.05), 1.0)
+    f = np.where(valid, f, 1.0)
     f = np.clip(f, cfg.smooth_min_factor, cfg.smooth_max_factor)
     if layer_tqi is not None:
         tq = np.asarray(layer_tqi, dtype=np.float64)
@@ -290,51 +295,85 @@ def optimize_surface(
 ) -> OptimizeResult:
     """表面一致模式：平滑逐层层时（冷却纹理的根源），TQI 仅作安全约束。
 
-    层时突变 = 表面光泽突变。策略：每层速度因子 = 原层时 / 平滑目标层时
-    （单次解析计算，不迭代），随后跑一次验证仿真确认热质量不崩
-    （mean TQI 掉超 8 分则回滚原速）。需要基线仿真结果提供逐层 TQI。
+    流程：解析层时分解（空走固定 + 挤出可缩放）→ 多档平滑强度 ρ 各算一版
+    速度因子 → 按解析层时平滑度选最优档（保证不差于原速，否则不动）→
+    跑一次验证仿真确认热质量（mean TQI 掉超 8 分则回滚原速）。
+    需要基线仿真结果提供逐层 TQI。
     """
     orig_feed = parsed.feedrate.copy()
     orig_times = (parsed.t_mid.copy(), parsed.duration.copy(),
                   parsed.layer_t0.copy(), parsed.layer_t1.copy())
     result = OptimizeResult(new_feed=orig_feed.copy())
 
-    lt = parsed.layer_t1.astype(np.float64) - parsed.layer_t0.astype(np.float64)
+    n_layers = parsed.num_layers
+    li = parsed.layer_idx
+    g = parsed.geometry
+    dist = np.hypot(g[:, 3] - g[:, 0], g[:, 4] - g[:, 1])
+    travel_l = np.bincount(li, weights=parsed.travel_before, minlength=n_layers)
+    extrude_l = np.bincount(li, weights=parsed.duration, minlength=n_layers)
+    lt = travel_l + extrude_l
+    s_before = _lt_smoothness(lt)
+
     tq = None
     base_ov = None
     if baseline_result is not None and getattr(baseline_result, "layer_stats", None):
-        tq = np.full(parsed.num_layers, np.nan)
+        tq = np.full(n_layers, np.nan)
         for st in baseline_result.layer_stats:
-            if st.get("mean_tqi") is not None and 0 <= st["layer"] < parsed.num_layers:
+            if st.get("mean_tqi") is not None and 0 <= st["layer"] < n_layers:
                 tq[st["layer"]] = st["mean_tqi"]
         base_ov = _tqi_overview(baseline_result, parsed)
         base_ov["est_time_s"] = float(parsed.t_mid[-1] + parsed.duration[-1])
         result.baseline = base_ov
 
-    factors = compute_layer_time_factors(lt, tq, opt_config)
-    lf, ltf = opt_config.layers_from, opt_config.layers_to
-    if lf is not None:
-        factors[:max(int(lf), 0)] = 1.0
-    if ltf is not None:
-        factors[int(ltf) + 1:] = 1.0
-
-    feed = np.clip(orig_feed * factors[parsed.layer_idx],
-                   opt_config.min_speed, opt_config.max_speed)
-    if opt_config.max_flow_mm3s:
-        g = parsed.geometry
-        seg_len = np.maximum(np.hypot(g[:, 3] - g[:, 0], g[:, 4] - g[:, 1]), 1e-6)
-        vol_per_mm = np.maximum(parsed.extrusion_mm3 / seg_len, 1e-6)
-        feed = np.minimum(feed, np.maximum(opt_config.max_flow_mm3s / vol_per_mm,
-                                           opt_config.min_speed))
-    _retime(parsed, feed)
-    lt_after = parsed.layer_t1.astype(np.float64) - parsed.layer_t0.astype(np.float64)
-    result.round_stats.append({
-        "round": 1,
-        "smoothness_before": _lt_smoothness(lt),
-        "smoothness_after": _lt_smoothness(lt_after),
-    })
+    # ---- 多档强度解析自检：选平滑度最优的档，保证不差于原速 ----
+    best_feed, best_s, best_lt = None, s_before, None
+    rho = float(opt_config.smooth_target)
+    for _ in range(3):
+        cfg_k = dc_replace(opt_config, smooth_target=rho)
+        factors = compute_layer_time_factors(travel_l, extrude_l, tq, cfg_k)
+        lf, ltf = opt_config.layers_from, opt_config.layers_to
+        if lf is not None:
+            factors[:max(int(lf), 0)] = 1.0
+        if ltf is not None:
+            factors[int(ltf) + 1:] = 1.0
+        feed_k = np.clip(orig_feed * factors[li],
+                         opt_config.min_speed, opt_config.max_speed)
+        if opt_config.max_flow_mm3s:
+            vol_per_mm = np.maximum(parsed.extrusion_mm3 / np.maximum(dist, 1e-6), 1e-6)
+            feed_k = np.minimum(feed_k, np.maximum(opt_config.max_flow_mm3s / vol_per_mm,
+                                                   opt_config.min_speed))
+        ex_k = np.bincount(li, weights=dist / np.maximum(feed_k, 1e-6), minlength=n_layers)
+        t_new = travel_l + ex_k
+        s_k = _lt_smoothness(t_new)
+        if s_k < best_s - 1e-9:
+            best_feed, best_s, best_lt = feed_k, s_k, t_new
+        rho *= 0.5
     if progress_cb:
         progress_cb(0.6)
+
+    if best_feed is None:
+        # 任何档位都无法改善 → 保持原速（平滑度只降不升的硬保证）
+        _retime(parsed, orig_feed)
+        result.round_stats.append({
+            "round": 1, "smoothness_before": s_before,
+            "smoothness_after": s_before, "no_improvement": True,
+        })
+        overview = dict(base_ov) if base_ov else {
+            "mean_tqi": None, "est_time_s": float(parsed.t_mid[-1] + parsed.duration[-1])}
+        result.final = overview
+        result.final["est_time_s"] = float(parsed.t_mid[-1] + parsed.duration[-1])
+        result.new_feed = orig_feed
+        return result
+
+    feed = best_feed
+    _retime(parsed, feed)
+    result.round_stats.append({
+        "round": 1,
+        "smoothness_before": s_before,
+        "smoothness_after": best_s,
+    })
+    if progress_cb:
+        progress_cb(0.7)
 
     sim = ThermalSimulator(parsed, material, sim_config, cancel_check=cancel_check)
     res = sim.run()
@@ -342,6 +381,7 @@ def optimize_surface(
     overview["est_time_s"] = float(parsed.t_mid[-1] + parsed.duration[-1])
 
     # 热质量保底：mean TQI 掉超 8 分 → 回滚原速（表面一致不能以热崩为代价）
+    rolled = False
     if base_ov is not None and base_ov.get("mean_tqi") is not None:
         if (overview.get("mean_tqi") is not None
                 and overview["mean_tqi"] < base_ov["mean_tqi"] - 8.0):
@@ -349,10 +389,9 @@ def optimize_surface(
             _retime(parsed, feed)
             overview = dict(base_ov)
             overview["rolled_back"] = True
-        else:
-            result.layer_times_after = [round(float(x), 2) for x in lt_after]
-    else:
-        result.layer_times_after = [round(float(x), 2) for x in lt_after]
+            rolled = True
+    if not rolled:
+        result.layer_times_after = [round(float(x), 2) for x in best_lt]
 
     result.final = overview
     result.final["est_time_s"] = float(parsed.t_mid[-1] + parsed.duration[-1])
