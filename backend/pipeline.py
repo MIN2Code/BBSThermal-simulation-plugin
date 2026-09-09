@@ -328,6 +328,13 @@ def pack_result(parsed: ParsedGcode, res: SimResult, material_name: str) -> tupl
         "seg_stride": SEG_STRIDE,
         "material": material_name,
     }
+    # 层时校准系数：官方估计总时长 / 我们的恒速总时长（补偿加减速，
+    # Bambu 头部含官方值时通常 ~1.4-1.6）。前端"层时"视图用它显示
+    # 接近切片器报告的绝对层时；相对分布仍是我们算的。
+    our_total = float(parsed.t_mid[-1] + parsed.duration[-1])
+    est = float(parsed.info.est_print_time_s or 0)
+    if our_total > 60 and est > our_total * 0.5:
+        meta["summary"]["time_ratio"] = round(min(max(est / our_total, 0.5), 3.0), 3)
     return payload.tobytes(), meta
 
 

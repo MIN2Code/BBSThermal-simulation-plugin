@@ -210,10 +210,11 @@ export class Viewer {
     if (this._ltLUT) return this._ltLUT;
     const stats = (this.meta && this.meta.layer_stats) || [];
     if (!stats.length) return null;
+    const cal = (this.meta && this.meta.summary && this.meta.summary.time_ratio) || 1.0;
     const nl = Math.max(...stats.map((s) => s.layer + 1));
     const lt = new Array(nl).fill(NaN);
     for (const s of stats) {
-      const v = (s.t1 ?? NaN) - (s.t0 ?? NaN);
+      const v = ((s.t1 ?? NaN) - (s.t0 ?? NaN)) * cal;
       if (isFinite(v) && v > 0.01) lt[s.layer] = v;
     }
     const fin = lt.filter((v) => isFinite(v));
@@ -227,6 +228,7 @@ export class Viewer {
       if (!isFinite(v)) continue;
       let k = Math.floor((Math.log(v) - lo) / ((hi - lo) / LT_BAND_COLORS.length));
       k = Math.min(LT_BAND_COLORS.length - 1, Math.max(0, k));
+      k = LT_BAND_COLORS.length - 1 - k;  // 长层=绿（色带首端），短层=紫（对齐 BS 层时间视图）
       const c = LT_BAND_COLORS[k];
       lut[L * 3] = ((c >> 16) & 255) / 255;
       lut[L * 3 + 1] = ((c >> 8) & 255) / 255;
@@ -239,16 +241,18 @@ export class Viewer {
   /** 图例信息：对数档位边界值 + 颜色（app.js 渲染用）。 */
   layerTimeBands() {
     const stats = (this.meta && this.meta.layer_stats) || [];
-    const fin = stats.map((s) => (s.t1 ?? NaN) - (s.t0 ?? NaN)).filter((v) => isFinite(v) && v > 0.01);
+    const cal = (this.meta && this.meta.summary && this.meta.summary.time_ratio) || 1.0;
+    const fin = stats.map((s) => ((s.t1 ?? NaN) - (s.t0 ?? NaN)) * cal).filter((v) => isFinite(v) && v > 0.01);
     if (fin.length < 3) return null;
     const lo = Math.min(...fin), hi = Math.max(...fin);
     if (hi / lo < 1.05) return null;
     const ratio = Math.pow(hi / lo, 1 / LT_BAND_COLORS.length);
     const edges = [];
     for (let k = 0; k <= LT_BAND_COLORS.length; k++) edges.push(lo * Math.pow(ratio, k));
+    // 图例从左到右 = 绿(最长) → 紫(最短)，与色带反转方向一致
     return {
-      colors: LT_BAND_COLORS.map((c) => `#${c.toString(16).padStart(6, '0')}`),
-      edges, lo, hi,
+      colors: [...LT_BAND_COLORS].reverse().map((c) => `#${c.toString(16).padStart(6, '0')}`),
+      edges: edges.reverse(), lo, hi,
     };
   }
 
