@@ -1,5 +1,5 @@
 // 应用编排：上传 → 预览 → 仿真 → 报告，UI 状态管理。
-import { Viewer, FEATURE_NAMES, tqiColor } from './viewer.js?v=20260909b';
+import { Viewer, FEATURE_NAMES, tqiColor } from './viewer.js?v=20260909c';
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -314,7 +314,7 @@ async function showSummary(s) {
       <span>尺寸</span><b>${(s.bbox_max[0]-s.bbox_min[0]).toFixed(0)}×${(s.bbox_max[1]-s.bbox_min[1]).toFixed(0)}×${(s.bbox_max[2]-s.bbox_min[2]).toFixed(1)} mm</b>
       <span>层数</span><b>${s.layers}</b>
       <span>路径段</span><b>${s.segments.toLocaleString()}</b>
-      <span>切片耗时</span><b>${fmtTime(s.print_time_s)}</b>
+      <span>切片耗时</span><b>${s.official_print_time_s ? fmtTime(s.official_print_time_s) : fmtTime(s.print_time_s)}${s.official_print_time_s ? ' <span style="color:var(--dim)">（切片器口径）</span>' : ''}</b>
       <span>耗料</span><b>${(s.extrusion_mm3 / 1000).toFixed(1)} cm³</b>
       <span>喷嘴/热床</span><b>${s.nozzle_temp}°C / ${s.bed_temp}°C</b>
       <span>切片器</span><b>${s.slicer || '—'}</b>
@@ -341,7 +341,7 @@ function renderReport(meta) {
       ${s.printer_model ? `<span>机型</span><b>${s.printer_model}</b>` : ''}
       <span>尺寸</span><b>${(s.bbox_max[0]-s.bbox_min[0]).toFixed(0)}×${(s.bbox_max[1]-s.bbox_min[1]).toFixed(0)}×${(s.bbox_max[2]-s.bbox_min[2]).toFixed(1)} mm</b>
       <span>层数 / 段数</span><b>${s.layers} / ${s.segments.toLocaleString()}</b>
-      <span>切片耗时</span><b>${fmtTime(s.print_time_s)}</b>
+      <span>切片耗时</span><b>${s.official_print_time_s ? fmtTime(s.official_print_time_s) : fmtTime(s.print_time_s)}${s.official_print_time_s ? ' <span style="color:var(--dim)">（切片器口径）</span>' : ''}</b>
     </div>
     <h3>TQI 总览（热质量指数）</h3>
     <div class="kv">
@@ -516,7 +516,7 @@ function renderOptimizeReport(m) {
         : `<span>平均 TQI</span><b>${b.mean_tqi.toFixed(1)} → <span style="color:${tqiCss(f.mean_tqi)}">${f.mean_tqi.toFixed(1)}</span></b>
       <span>偏冷段占比</span><b>${(b.cold_pct ?? 0).toFixed(1)}% → ${(f.cold_pct ?? 0).toFixed(1)}%</b>
       <span>偏热段占比</span><b>${(b.hot_pct ?? 0).toFixed(1)}% → ${(f.hot_pct ?? 0).toFixed(1)}%</b>`}
-      <span>预计时长</span><b>${fmtTime(b.est_time_s)} → ${fmtTime(f.est_time_s)}${dt != null ? `（${dt > 0 ? '+' : ''}${dt.toFixed(1)}%）` : ''}</b>
+      <span>预计时长</span><b>${fmtTime(b.est_time_s * (m.time_ratio || 1))} → ${fmtTime(f.est_time_s * (m.time_ratio || 1))}${dt != null ? `（${dt > 0 ? '+' : ''}${dt.toFixed(1)}%）` : ''}${m.time_ratio ? ' <span style="color:var(--dim)">切片器口径</span>' : ''}</b>
       <span>改写行数</span><b>${m.changed_lines.toLocaleString()}</b>
       ${f.rolled_back ? '<span style="color:#e8a13f">已回滚</span><b style="color:#e8a13f">热质量保底触发，维持原速</b>' : ''}
     </div>
