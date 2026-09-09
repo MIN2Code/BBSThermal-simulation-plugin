@@ -1,5 +1,5 @@
 // 应用编排：上传 → 预览 → 仿真 → 报告，UI 状态管理。
-import { Viewer, FEATURE_NAMES, tqiColor } from './viewer.js';
+import { Viewer, FEATURE_NAMES, tqiColor } from './viewer.js?v=20260909b';
 
 const $ = (id) => document.getElementById(id);
 const state = {
