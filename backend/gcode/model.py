@@ -101,6 +101,8 @@ class ParsedGcode:
             "segments": self.num_segments,
             "layers": self.num_layers,
             "print_time_s": float(self.t_mid[-1] + self.duration[-1]) if self.num_segments else 0.0,
+            # 切片器官方口径时长（G-code 头部，含加减速；恒速估计的 1.3~1.5 倍）
+            "official_print_time_s": float(self.info.est_print_time_s or 0.0),
             "bbox_min": self.bbox_min.tolist(),
             "bbox_max": self.bbox_max.tolist(),
             "extrusion_mm3": ext,

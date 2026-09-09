@@ -240,6 +240,8 @@ def _opt_worker(job: Job, params: dict) -> None:
             "changed_lines": changed,
             "mode": mode,
             "layer_times": layer_times,
+            "time_ratio": (job.meta.get("summary", {}).get("time_ratio")
+                           if job.meta else None),
             "params": {"rounds": opt_cfg.rounds, "cold_gain": opt_cfg.cold_gain,
                        "hot_gain": opt_cfg.hot_gain},
             "material": material.name,
