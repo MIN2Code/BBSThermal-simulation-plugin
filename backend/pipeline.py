@@ -165,6 +165,23 @@ def _worker(job: Job, params: dict) -> None:
         job.status = "error"
 
 
+def apply_temp_bias(job_id: str, delta_t: float) -> tuple[bytes, int]:
+    """整件喷嘴温度偏置（台阶一：全局静态平移）。返回 (G-code/3mf 字节, 修改指令数)。"""
+    from .gcode.temp_bias import apply_nozzle_temp_bias
+
+    job = get_job(job_id)
+    if not job.raw_text:
+        raise RuntimeError("任务无原始 G-code")
+    delta_t = max(-15.0, min(15.0, float(delta_t)))
+    text, changed = apply_nozzle_temp_bias(job.raw_text, delta_t)
+    data = text.encode("utf-8")
+    if job.source_zip:
+        from .gcode.bambu3mf import repack_3mf
+
+        data = repack_3mf(job.source_zip, data)
+    return data, changed
+
+
 def cancel_job(job_id: str) -> bool:
     """请求中断进行中的仿真/优化。返回是否已受理。"""
     job = get_job(job_id)
