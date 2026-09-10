@@ -126,6 +126,25 @@ def optimize_meta(job_id: str):
     return job.opt_meta
 
 
+@router.get("/job/{job_id}/tempbias/{delta}")
+def temp_bias_download(job_id: str, delta: float):
+    """整件喷嘴温度偏置（±15°C clamp）下载。S<100 关温指令不受影响。"""
+    try:
+        data, changed = pipeline.apply_temp_bias(job_id, delta)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    job = pipeline.get_job(job_id)
+    name = f"tempbias_{delta:+.0f}_{job_id}." + ("gcode.3mf" if job.source_zip else "gcode")
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{name}"',
+                 "X-Bias-Changed": str(changed)},
+    )
+
+
 @router.get("/optimize/{job_id}/download")
 def optimize_download(job_id: str):
     try:

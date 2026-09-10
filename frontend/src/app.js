@@ -525,8 +525,30 @@ function renderOptimizeReport(m) {
     <div style="margin:10px 0">
       <a class="btn primary" style="text-decoration:none;display:block;text-align:center"
          href="/api/optimize/${state.jobId}/download" download>下载优化后 G-code</a>
+    </div>
+    <h3>温度偏置（可选）</h3>
+    <div class="kv" style="align-items:center">
+      <span>说明</span><b style="font-weight:400">整件喷嘴温度平移，弱结合偏冷件可 +3~8°C；偏置会叠加到所有温度指令（含变温件各档）</b>
+      <span>偏置</span><input type="number" id="tbias" step="1" min="-15" max="15" value="0" style="width:70px">
+      <span>喷嘴</span><b id="tbiasval">—</b>
+      <button class="btn" id="tbiasdn" disabled>应用并下载</button>
     </div>`);
   if (m.layer_times) drawLayerTimes(m.layer_times);
+  const tbi = $('tbias');
+  if (tbi) {
+    const noz = state.meta && state.meta.summary ? state.meta.summary.nozzle_temp : null;
+    const upd = () => {
+      const d = parseFloat(tbi.value) || 0;
+      $('tbiasval').textContent = noz != null ? `${noz} → ${Math.round(noz + d)}°C` : '—';
+      $('tbiasdn').disabled = !d;
+    };
+    tbi.addEventListener('input', upd);
+    $('tbiasdn').addEventListener('click', () => {
+      const d = parseFloat(tbi.value) || 0;
+      if (d) window.location.href = `/api/job/${state.jobId}/tempbias/${d}`;
+    });
+    upd();
+  }
 }
 
 function drawLayerTimes(lt) {
