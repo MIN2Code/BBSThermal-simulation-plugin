@@ -82,7 +82,9 @@ def test_compute_layer_time_factors_smooths_spikes():
     travel = np.full(extrude.size, 1.0)
     f = compute_layer_time_factors(travel, extrude, None, OptimizeConfig())
     assert np.all(np.isfinite(f)) and f.size == extrude.size
-    assert (f[40:55] > 1.1).all(), f"突变长层应被提速，实际 {f[40:55]}"
+    # 速度变化率限制（防波浪纹）下，因子在脉冲前段线性爬坡、平台区达到峰值
+    assert (f[50:55] > 1.1).all(), f"突变长层平台区应被提速，实际 {f[40:55]}"
+    assert (np.abs(np.diff(f[38:58])) <= 0.05 + 1e-9).all(), "相邻层速度因子变化率不得超 5%"
     assert abs(f[:12] - 1.0).max() < 0.05 and abs(f[83:] - 1.0).max() < 0.05,         "远离突变的层速度因子应≈1（近突变层的偏移是渐变过渡，属预期）"
 
 
