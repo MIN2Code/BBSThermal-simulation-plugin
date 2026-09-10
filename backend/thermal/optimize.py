@@ -242,6 +242,28 @@ def _rolling_mean(a: np.ndarray, w: int) -> np.ndarray:
     return np.convolve(ap, np.ones(w) / w, mode="valid")[: a.size]
 
 
+def _rate_limit(f: np.ndarray, max_step: float,
+                lo: np.ndarray | None = None,
+                hi: np.ndarray | None = None) -> np.ndarray:
+    """逐层变化率限制：|f[i+1]−f[i]| ≤ max_step（前向传播）。
+
+    层时平滑必然要求速度不平滑（几何工作量突变处尤甚），但相邻层速度
+    阶跃会引发振动/挤出不均——实测下巴波浪纹（相邻层 Δf 达 9%）。5%/层
+    的限制让速度在数层内渐变，机器与挤出不感知突变。
+    lo/hi 为硬边界（TQI 安全锁：冷层 ≥1、热层 ≤1）——锁优先于限速平滑，
+    传播中越界立即拉回（锁边界的阶跃是安全代价，接受）。
+    """
+    g = f.copy()
+    for i in range(1, g.size):
+        v = min(max(g[i], g[i - 1] - max_step), g[i - 1] + max_step)
+        if lo is not None:
+            v = max(v, lo[i])
+        if hi is not None:
+            v = min(v, hi[i])
+        g[i] = v
+    return g
+
+
 def compute_layer_time_factors(
     travel_t: np.ndarray,
     extrude_t: np.ndarray,
@@ -275,13 +297,17 @@ def compute_layer_time_factors(
     f = np.where(denom > 0.05, extrude_t / np.maximum(denom, 0.05), 1.0)
     f = np.where(valid, f, 1.0)
     f = np.clip(f, cfg.smooth_min_factor, cfg.smooth_max_factor)
+    lo = hi = None
     if layer_tqi is not None:
         tq = np.asarray(layer_tqi, dtype=np.float64)
         cold = np.isfinite(tq) & (tq < cfg.cold_threshold)
         hot = np.isfinite(tq) & (tq > cfg.hot_threshold)
         f = np.where(cold, np.maximum(f, 1.0), f)
         f = np.where(hot, np.minimum(f, 1.0), f)
-    return f
+        lo = np.where(cold, 1.0, -np.inf)   # 冷层硬下界：限速传播中不得跌破
+        hi = np.where(hot, 1.0, np.inf)     # 热层硬上界
+    f = _rolling_mean(f, 5)
+    return _rate_limit(f, 0.05, lo, hi)
 
 
 def optimize_surface(
@@ -338,6 +364,10 @@ def optimize_surface(
             factors[int(ltf) + 1:] = 1.0
         feed_k = np.clip(orig_feed * factors[li],
                          opt_config.min_speed, opt_config.max_speed)
+        # 表面保护：外墙段只降不升（提速外墙=振纹风险；脸/下巴全是外墙）
+        if parsed.info.has_feature_comments:
+            outer = parsed.feature_id == 8  # Feature.OUTER_WALL
+            feed_k = np.where(outer & (feed_k > orig_feed), orig_feed, feed_k)
         if opt_config.max_flow_mm3s:
             vol_per_mm = np.maximum(parsed.extrusion_mm3 / np.maximum(dist, 1e-6), 1e-6)
             feed_k = np.minimum(feed_k, np.maximum(opt_config.max_flow_mm3s / vol_per_mm,
